@@ -44,7 +44,7 @@ func New() *Service {
 
 func (s *Service) recreateProvider() {
 	cfg := config.GetConfig()
-	providerType := cfg.GetEffectiveProvider()
+	providerType := cfg.LLMProvider
 
 	var p Provider
 	var err error

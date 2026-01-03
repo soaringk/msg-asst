@@ -14,13 +14,6 @@ import (
 	"go.uber.org/zap"
 )
 
-var openAICapabilities = Capabilities{
-	SupportsImage: true,
-	SupportsVideo: false,
-	SupportsAudio: true,
-	SupportsPDF:   false,
-}
-
 type OpenAIProvider struct {
 	client atomic.Pointer[openai.Client]
 	model  string
@@ -50,13 +43,6 @@ func NewOpenAIProvider(cfg OpenAIConfig) *OpenAIProvider {
 		zap.String("baseURL", cfg.BaseURL))
 
 	return p
-}
-
-func (p *OpenAIProvider) Capabilities() Capabilities {
-	return openAICapabilities
-}
-
-func (p *OpenAIProvider) Close() {
 }
 
 func (p *OpenAIProvider) GenerateContent(ctx context.Context, systemPrompt string, contents []*chat.Content) (string, error) {

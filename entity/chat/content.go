@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/eatmoreapple/openwechat"
+	"github.com/soaringk/wechat-meeting-scribe/entity/config"
 	"github.com/soaringk/wechat-meeting-scribe/pkg/logging"
 	"go.uber.org/zap"
 )
@@ -94,6 +95,21 @@ type mediaGetter func() (*http.Response, error)
 
 func extractMedia(msg *openwechat.Message, contentType ContentType, getter mediaGetter) (*Content, error) {
 	log := logging.Named("content")
+	cfg := config.GetConfig()
+
+	var maxBytes int64
+	switch contentType {
+	case ContentTypeImage:
+		maxBytes = cfg.MediaSupport.MaxImageBytes
+	case ContentTypeVideo:
+		maxBytes = cfg.MediaSupport.MaxVideoBytes
+	case ContentTypeAudio:
+		maxBytes = cfg.MediaSupport.MaxAudioBytes
+	case ContentTypePDF:
+		maxBytes = cfg.MediaSupport.MaxPDFBytes
+	default:
+		maxBytes = 100 * 1024 * 1024 // 100MB default for others
+	}
 
 	resp, err := getter()
 	if err != nil {
@@ -105,12 +121,35 @@ func extractMedia(msg *openwechat.Message, contentType ContentType, getter media
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(resp.Body)
+	if resp.ContentLength > maxBytes {
+		log.Warn("Media too large, skipping",
+			zap.String("type", string(contentType)),
+			zap.Int64("size", resp.ContentLength),
+			zap.Int64("limit", maxBytes))
+		return &Content{
+			Type: contentType,
+			Text: fmt.Sprintf("[文件过大: %s]", contentType),
+		}, nil
+	}
+
+	// Read up to maxBytes + 1 to detect if it exceeds limit when ContentLength is unknown
+	reader := io.LimitReader(resp.Body, maxBytes+1)
+	data, err := io.ReadAll(reader)
 	if err != nil {
 		log.Error("Failed to read media body", zap.Error(err))
 		return &Content{
 			Type: contentType,
 			Text: fmt.Sprintf("[读取%s失败]", contentType),
+		}, nil
+	}
+
+	if int64(len(data)) > maxBytes {
+		log.Warn("Media stream exceeded limit, skipping",
+			zap.String("type", string(contentType)),
+			zap.Int64("limit", maxBytes))
+		return &Content{
+			Type: contentType,
+			Text: fmt.Sprintf("[文件过大: %s]", contentType),
 		}, nil
 	}
 

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -37,7 +36,7 @@ type Config struct {
 	LLMAPIKey        string
 	LLMBaseURL       string
 	LLMModel         string
-	LLMProvider      string // "auto", "openai", or "gemini"
+	LLMProvider      string // "openai" or "gemini"
 	SystemPromptFile string
 	BotName          string
 	SummaryTrigger   SummaryTriggerConfig
@@ -69,28 +68,6 @@ func GetTargetRooms() []string {
 		return nil
 	}
 	return *rooms
-}
-
-func (c *Config) GetEffectiveProvider() string {
-	if c.LLMProvider != "auto" {
-		return c.LLMProvider
-	}
-	url := strings.ToLower(c.LLMBaseURL)
-	model := strings.ToLower(c.LLMModel)
-
-	if strings.Contains(url, "generativelanguage.googleapis.com") {
-		if strings.Contains(url, "/openai") {
-			return "openai"
-		}
-		return "gemini"
-	}
-	if strings.Contains(url, "openai.com") {
-		return "openai"
-	}
-	if strings.Contains(model, "gemini") {
-		return "openai"
-	}
-	return "openai"
 }
 
 // OnConfigChange registers a callback to be called when config changes
@@ -139,9 +116,9 @@ func Parse() error {
 
 	cfg := &Config{
 		LLMAPIKey:        getEnv("LLM_API_KEY", ""),
-		LLMBaseURL:       getEnv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"),
+		LLMBaseURL:       getEnv("LLM_BASE_URL", "https://generativelanguage.googleapis.com"),
 		LLMModel:         getEnv("LLM_MODEL", "gemini-2.5-flash"),
-		LLMProvider:      getEnv("LLM_PROVIDER", "auto"),
+		LLMProvider:      getEnv("LLM_PROVIDER", "gemini"),
 		SystemPromptFile: getEnv("SYSTEM_PROMPT_FILE", "system_prompt.txt"),
 		BotName:          getEnv("BOT_NAME", "meeting-minutes-bot"),
 		SummaryTrigger: SummaryTriggerConfig{

@@ -20,7 +20,7 @@ type Message struct {
 }
 
 type roomData struct {
-	mu              sync.Mutex
+	mu              sync.RWMutex
 	messages        []Message
 	writeIndex      int
 	count           int
@@ -40,16 +40,14 @@ func New() *MessageBuffer {
 }
 
 func (b *MessageBuffer) getOrCreateRoom(roomTopic string) *roomData {
-	room, ok := b.rooms.Get(roomTopic)
-	if !ok {
+	room, _ := b.rooms.GetOrCompute(roomTopic, func() *roomData {
 		cap := config.GetConfig().MaxBufferSize
-		room = &roomData{
+		return &roomData{
 			messages:   make([]Message, cap),
 			capacity:   cap,
 			messageIDs: make(map[string]struct{}),
 		}
-		b.rooms.Set(roomTopic, room)
-	}
+	})
 	return room
 }
 
@@ -117,8 +115,8 @@ func (b *MessageBuffer) ShouldSummarize(roomTopic string, triggeredByKeyword boo
 		return false
 	}
 
-	room.mu.Lock()
-	defer room.mu.Unlock()
+	room.mu.RLock()
+	defer room.mu.RUnlock()
 
 	cfg := config.GetConfig()
 
@@ -174,8 +172,8 @@ func (b *MessageBuffer) GetSnapshot(roomTopic string) Snapshot {
 		return Snapshot{Participants: make(map[string]struct{})}
 	}
 
-	room.mu.Lock()
-	defer room.mu.Unlock()
+	room.mu.RLock()
+	defer room.mu.RUnlock()
 
 	snapshot := Snapshot{
 		Count:        room.count,

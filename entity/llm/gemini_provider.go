@@ -10,13 +10,6 @@ import (
 	"google.golang.org/genai"
 )
 
-var geminiCapabilities = Capabilities{
-	SupportsImage: true,
-	SupportsVideo: true,
-	SupportsAudio: true,
-	SupportsPDF:   true,
-}
-
 type GeminiProvider struct {
 	client *genai.Client
 	model  string
@@ -46,13 +39,6 @@ func NewGeminiProvider(ctx context.Context, cfg GeminiConfig) (*GeminiProvider, 
 		model:  cfg.Model,
 		log:    log,
 	}, nil
-}
-
-func (p *GeminiProvider) Capabilities() Capabilities {
-	return geminiCapabilities
-}
-
-func (p *GeminiProvider) Close() {
 }
 
 func (p *GeminiProvider) GenerateContent(ctx context.Context, systemPrompt string, contents []*chat.Content) (string, error) {
