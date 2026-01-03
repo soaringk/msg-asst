@@ -355,45 +355,24 @@ func parseBytes(s string) (int64, error) {
 	}
 
 	s = strings.ToUpper(s)
-	var multiplier int64 = 1
-	suffix := s[len(s)-1]
+	var multiplier float64 = 1
 
-	switch suffix {
-	case 'K':
-		multiplier = 1024
-		s = s[:len(s)-1]
-	case 'M':
-		multiplier = 1024 * 1024
-		s = s[:len(s)-1]
-	case 'G':
+	if strings.HasSuffix(s, "G") {
 		multiplier = 1024 * 1024 * 1024
 		s = s[:len(s)-1]
-	case 'B':
-		if len(s) >= 2 {
-			prev := s[len(s)-2]
-			switch prev {
-			case 'K':
-				multiplier = 1024
-				s = s[:len(s)-2]
-			case 'M':
-				multiplier = 1024 * 1024
-				s = s[:len(s)-2]
-			case 'G':
-				multiplier = 1024 * 1024 * 1024
-				s = s[:len(s)-2]
-			default:
-				s = s[:len(s)-1]
-			}
-		} else {
-			s = s[:len(s)-1]
-		}
+	} else if strings.HasSuffix(s, "M") {
+		multiplier = 1024 * 1024
+		s = s[:len(s)-1]
+	} else if strings.HasSuffix(s, "K") {
+		multiplier = 1024
+		s = s[:len(s)-1]
 	}
 
-	val, err := strconv.ParseInt(s, 10, 64)
+	val, err := strconv.ParseFloat(s, 64)
 	if err != nil {
 		return 0, err
 	}
-	return val * multiplier, nil
+	return int64(val * multiplier), nil
 }
 
 func getEnvBool(key string, defaultValue bool) bool {

@@ -115,7 +115,7 @@ func extractMedia(msg *openwechat.Message, contentType ContentType, getter media
 	if err != nil {
 		log.Error("Failed to get media", zap.Error(err))
 		return &Content{
-			Type: contentType,
+			Type: ContentTypeText,
 			Text: fmt.Sprintf("[获取%s失败]", contentType),
 		}, nil
 	}
@@ -127,7 +127,7 @@ func extractMedia(msg *openwechat.Message, contentType ContentType, getter media
 			zap.Int64("size", resp.ContentLength),
 			zap.Int64("limit", maxBytes))
 		return &Content{
-			Type: contentType,
+			Type: ContentTypeText,
 			Text: fmt.Sprintf("[文件过大: %s]", contentType),
 		}, nil
 	}
@@ -138,7 +138,7 @@ func extractMedia(msg *openwechat.Message, contentType ContentType, getter media
 	if err != nil {
 		log.Error("Failed to read media body", zap.Error(err))
 		return &Content{
-			Type: contentType,
+			Type: ContentTypeText,
 			Text: fmt.Sprintf("[读取%s失败]", contentType),
 		}, nil
 	}
@@ -148,7 +148,7 @@ func extractMedia(msg *openwechat.Message, contentType ContentType, getter media
 			zap.String("type", string(contentType)),
 			zap.Int64("limit", maxBytes))
 		return &Content{
-			Type: contentType,
+			Type: ContentTypeText,
 			Text: fmt.Sprintf("[文件过大: %s]", contentType),
 		}, nil
 	}

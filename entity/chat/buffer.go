@@ -11,14 +11,6 @@ import (
 	"go.uber.org/zap"
 )
 
-type Message struct {
-	ID         string
-	Timestamp  time.Time
-	Sender     string
-	GroupTopic string
-	Content    *Content
-}
-
 type groupData struct {
 	mu              sync.RWMutex
 	messages        []Message

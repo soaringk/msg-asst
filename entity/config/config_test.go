@@ -130,3 +130,33 @@ func TestGetTargetGroupsConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestParseBytes(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+		wantErr  bool
+	}{
+		{"10M", 10 * 1024 * 1024, false},
+		{"1.5M", 1572864, false}, // 1.5 * 1024 * 1024
+		{"1G", 1 * 1024 * 1024 * 1024, false},
+		{"0.5G", 512 * 1024 * 1024, false},
+		{"500K", 500 * 1024, false},
+		{"100", 100, false},
+		{"", 0, true},
+		{"Invalid", 0, true},
+		{"10KB", 0, true}, // "KB" not supported, strictly G, M, K
+		{"10B", 0, true},  // "B" not supported as suffix, strictly G, M, K or no suffix
+	}
+
+	for _, tt := range tests {
+		got, err := parseBytes(tt.input)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("parseBytes(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			continue
+		}
+		if got != tt.expected {
+			t.Errorf("parseBytes(%q) = %d, want %d", tt.input, got, tt.expected)
+		}
+	}
+}
