@@ -23,6 +23,12 @@ type Service struct {
 	stopWatcher  chan struct{}
 }
 
+type SummaryRequest struct {
+	RoomTopic    string
+	TimeRange    string
+	Messages     []string
+}
+
 func (s *Service) loadSystemPrompt() error {
 	cfg := config.GetConfig()
 	systemPromptBytes, err := os.ReadFile(cfg.SystemPromptFile)
@@ -122,13 +128,17 @@ func (s *Service) Close() {
 	}
 }
 
-func (s *Service) GenerateSummary(ctx context.Context, messages []string) (string, error) {
+func (s *Service) GenerateSummary(ctx context.Context, roomTopic, timeRange string, messageCount int, messages []string) (string, error) {
 	systemPrompt := s.getSystemPrompt()
 	client := s.client.Load()
 	model := s.model.Load()
 
-	conversationText := strings.Join(messages, "\n")
-	userPrompt := fmt.Sprintf("请为以下群聊消息生成会议纪要：\n\n%s", conversationText)
+	req := SummaryRequest{
+		RoomTopic: roomTopic,
+		TimeRange: timeRange,
+		Messages:  messages,
+	}
+	userPrompt := s.buildUserPrompt(req)
 
 	log.Printf("[LLM] Sending request to %s...", *model)
 
@@ -157,4 +167,15 @@ func (s *Service) GenerateSummary(ctx context.Context, messages []string) (strin
 	log.Printf("[LLM] Response received (%d chars)", len(content))
 
 	return content, nil
+}
+
+func (s *Service) buildUserPrompt(req SummaryRequest) string {
+	conversationText := strings.Join(req.Messages, "\n")
+	return fmt.Sprintf(
+		"群聊名称：%s\n消息时间范围：%s\n消息数量：%d\n\n请基于以下消息生成纪要，只输出结果本身：\n<messages>\n%s\n</messages>",
+		req.RoomTopic,
+		req.TimeRange,
+		len(req.Messages),
+		conversationText,
+	)
 }

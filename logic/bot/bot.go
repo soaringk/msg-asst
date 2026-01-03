@@ -251,17 +251,23 @@ func (b *Bot) summaryWorker() {
 func (b *Bot) generateAndSendSummary(roomTopic string) {
 	log.Printf("\n📝 [Bot] Generating summary for room '%s'...", roomTopic)
 
-	summaryText, err := b.generator.Generate(b.ctx, b.buffer, roomTopic)
+	result, err := b.generator.Generate(b.ctx, b.buffer, roomTopic)
 	if err != nil {
 		if err == context.Canceled {
 			log.Printf("[Bot] Summary generation cancelled for room '%s'", roomTopic)
 			return
 		}
 		log.Printf("❌ [Bot] Error generating summary for room '%s': %v", roomTopic, err)
-		summaryText = fmt.Sprintf("❌ 为「%s」生成会议纪要时出错：%v", roomTopic, err)
+		return
 	}
 
-	if sendErr := b.sendToSelf(summaryText); sendErr != nil {
+	if result.SkipReason != "" {
+		log.Printf("[Bot] Summary skipped for room '%s' (%s)", roomTopic, result.SkipReason)
+		b.buffer.Clear(roomTopic)
+		return
+	}
+
+	if sendErr := b.sendToSelf(result.Text); sendErr != nil {
 		log.Printf("❌ [Bot] Error sending summary: %v", sendErr)
 		return
 	}
