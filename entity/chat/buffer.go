@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -193,15 +192,7 @@ func (b *MessageBuffer) GetSnapshot(groupTopic string) Snapshot {
 		msg := group.messages[msgIndex]
 		snapshot.Participants[msg.Sender] = struct{}{}
 
-		header := fmt.Sprintf("[%s] %s:", msg.Timestamp.Format("15:04"), msg.Sender)
-		snapshot.Contents = append(snapshot.Contents, &Content{
-			Type: ContentTypeText,
-			Text: header,
-		})
-
-		if msg.Content != nil {
-			snapshot.Contents = append(snapshot.Contents, msg.Content)
-		}
+		snapshot.Contents = append(snapshot.Contents, msg.ToContentParts()...)
 	}
 
 	return snapshot
