@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -12,14 +11,16 @@ import (
 	"time"
 
 	"github.com/eatmoreapple/openwechat"
-	"github.com/soaringk/wechat-meeting-scribe/entity/buffer"
+	"github.com/soaringk/wechat-meeting-scribe/entity/chat"
 	"github.com/soaringk/wechat-meeting-scribe/entity/config"
 	"github.com/soaringk/wechat-meeting-scribe/logic/summary"
+	"github.com/soaringk/wechat-meeting-scribe/pkg/logging"
+	"go.uber.org/zap"
 )
 
 type Bot struct {
 	bot          *openwechat.Bot
-	buffer       *buffer.MessageBuffer
+	buffer       *chat.MessageBuffer
 	generator    *summary.Generator
 	self         *openwechat.Self
 	stopTimer    chan struct{}
@@ -34,7 +35,7 @@ func New() *Bot {
 
 	return &Bot{
 		bot:          openwechat.DefaultBot(openwechat.Desktop),
-		buffer:       buffer.New(),
+		buffer:       chat.New(),
 		generator:    summary.New(),
 		stopTimer:    make(chan struct{}),
 		summaryQueue: make(chan string, config.GetConfig().SummaryQueueSize),
@@ -44,7 +45,7 @@ func New() *Bot {
 }
 
 func (b *Bot) Start(selectRooms bool) error {
-	log.Println("🤖 Initializing WeChat Meeting Scribe...")
+	logging.Info("Initializing WeChat Meeting Scribe...")
 
 	b.bot.UUIDCallback = openwechat.PrintlnQrcodeUrl
 	b.bot.MessageHandler = b.handleMessage
@@ -52,23 +53,23 @@ func (b *Bot) Start(selectRooms bool) error {
 	reloadStorage := openwechat.NewFileHotReloadStorage("storage.json")
 	defer reloadStorage.Close()
 
-	log.Println("🚀 Starting bot...")
-	log.Println("⏳ Attempting hot login...")
+	logging.Info("Starting bot...")
+	logging.Info("Attempting hot login...")
 
 	err := b.bot.PushLogin(reloadStorage, openwechat.NewRetryLoginOption())
 	if err != nil {
-		log.Printf("❌ Login failed: %v", err)
+		logging.Error("Login failed", zap.Error(err))
 		return err
 	}
 
 	self, err := b.bot.GetCurrentUser()
 	if err != nil {
-		log.Printf("❌ Failed to get current user: %v", err)
+		logging.Error("Failed to get current user", zap.Error(err))
 		return err
 	}
 	b.self = self
 
-	log.Printf("\n✅ User %s logged in successfully!", self.NickName)
+	logging.Info("Logged in successfully", zap.String("user", self.NickName))
 
 	if selectRooms {
 		if err := b.promptRoomSelection(); err != nil {
@@ -76,7 +77,7 @@ func (b *Bot) Start(selectRooms bool) error {
 		}
 	}
 
-	log.Println("   [Bot] Bot is now active and monitoring messages.")
+	logging.Info("Bot is now active and monitoring messages")
 
 	go b.summaryWorker()
 
@@ -95,7 +96,7 @@ func (b *Bot) promptRoomSelection() error {
 	}
 
 	if len(groups) == 0 {
-		log.Println("No groups found.")
+		logging.Info("No groups found")
 		return nil
 	}
 
@@ -120,7 +121,7 @@ func (b *Bot) promptRoomSelection() error {
 		for _, group := range groups {
 			selectedRooms = append(selectedRooms, group.NickName)
 		}
-		log.Printf("✅ Selected all %d rooms", len(selectedRooms))
+		logging.Info("Selected all rooms", zap.Int("count", len(selectedRooms)))
 	} else {
 		parts := strings.Split(input, ",")
 		for _, part := range parts {
@@ -130,7 +131,7 @@ func (b *Bot) promptRoomSelection() error {
 			}
 			num, err := strconv.Atoi(part)
 			if err != nil || num < 1 || num > len(groups) {
-				log.Printf("⚠️  Invalid selection: %s (skipping)", part)
+				logging.Warn("Invalid selection", zap.String("input", part))
 				continue
 			}
 			selectedRooms = append(selectedRooms, groups[num-1].NickName)
@@ -138,7 +139,7 @@ func (b *Bot) promptRoomSelection() error {
 	}
 
 	if len(selectedRooms) == 0 {
-		log.Println("No rooms selected, will monitor all rooms.")
+		logging.Info("No rooms selected, will monitor all rooms")
 		return nil
 	}
 
@@ -156,24 +157,27 @@ func (b *Bot) promptRoomSelection() error {
 
 func (b *Bot) Stop() {
 	b.stopOnce.Do(func() {
-		log.Println("\n[Bot] Stopping bot...")
+		logging.Info("Stopping bot...")
 		b.cancel()
 		b.stopIntervalTimer()
 		close(b.summaryQueue)
 		b.generator.Close()
 		config.StopWatchers()
-		log.Println("[Bot] Bot stopped gracefully")
+		logging.Info("Bot stopped gracefully")
 	})
 }
 
 func (b *Bot) handleMessage(msg *openwechat.Message) {
-	if msg.IsSendBySelf() || !msg.IsText() {
+	if msg.IsSendBySelf() {
+		return
+	}
+
+	if !b.isSupportedMessageType(msg) {
 		return
 	}
 
 	sender, err := msg.Sender()
 	if err != nil {
-		log.Printf("Error getting message sender: %v", err)
 		return
 	}
 
@@ -190,32 +194,70 @@ func (b *Bot) handleMessage(msg *openwechat.Message) {
 
 	senderUser, err := msg.SenderInGroup()
 	if err != nil {
-		log.Printf("Error getting sender in group: %v", err)
 		return
 	}
 
-	content := msg.Content
-	if strings.TrimSpace(content) == "" {
+	extractedContent, err := chat.ExtractFromMessage(msg)
+	if err != nil {
 		return
 	}
 
-	bufferedMsg := buffer.BufferedMessage{
+	if !b.isMediaAllowed(extractedContent) {
+		return
+	}
+
+	if extractedContent.Type == chat.ContentTypeText && strings.TrimSpace(extractedContent.Text) == "" {
+		return
+	}
+
+	b.buffer.Add(chat.Message{
 		ID:        msg.MsgId,
 		Timestamp: time.Now(),
 		Sender:    senderUser.NickName,
-		Content:   content,
 		RoomTopic: groupName,
-	}
+		Content:   extractedContent,
+	})
 
-	b.buffer.Add(bufferedMsg)
-
-	if b.buffer.ShouldSummarize(groupName, b.checkKeywordTrigger(content)) {
+	if b.buffer.ShouldSummarize(groupName, b.checkKeywordTrigger(extractedContent.Text)) {
 		select {
 		case b.summaryQueue <- groupName:
 		default:
-			log.Printf("[Bot] WARN: Summary queue is full, dropping request for room '%s'", groupName)
 		}
 	}
+}
+
+func (b *Bot) isSupportedMessageType(msg *openwechat.Message) bool {
+	return msg.IsText() || msg.IsPicture() || msg.IsVideo() || msg.IsVoice() || msg.IsMedia()
+}
+
+func (b *Bot) isMediaAllowed(c *chat.Content) bool {
+	cfg := config.GetConfig()
+	ms := cfg.MediaSupport
+
+	var enabled bool
+	var maxBytes int64
+
+	switch c.Type {
+	case chat.ContentTypeText:
+		return true
+	case chat.ContentTypeImage:
+		enabled, maxBytes = ms.ImageEnabled, ms.MaxImageBytes
+	case chat.ContentTypeVideo:
+		enabled, maxBytes = ms.VideoEnabled, ms.MaxVideoBytes
+	case chat.ContentTypeAudio:
+		enabled, maxBytes = ms.AudioEnabled, ms.MaxAudioBytes
+	case chat.ContentTypePDF:
+		enabled, maxBytes = ms.PDFEnabled, ms.MaxPDFBytes
+	case chat.ContentTypeFile:
+		return true
+	default:
+		return true
+	}
+
+	if !enabled {
+		return false
+	}
+	return c.Data == nil || int64(len(c.Data)) <= maxBytes
 }
 
 func (b *Bot) isTargetRoom(roomName string) bool {
@@ -245,35 +287,35 @@ func (b *Bot) summaryWorker() {
 	for roomTopic := range b.summaryQueue {
 		b.generateAndSendSummary(roomTopic)
 	}
-	log.Println("[Bot] Summary worker stopped")
+	logging.Info("Summary worker stopped")
 }
 
 func (b *Bot) generateAndSendSummary(roomTopic string) {
-	log.Printf("\n📝 [Bot] Generating summary for room '%s'...", roomTopic)
+	logging.Info("Generating summary", zap.String("room", roomTopic))
 
 	result, err := b.generator.Generate(b.ctx, b.buffer, roomTopic)
 	if err != nil {
 		if err == context.Canceled {
-			log.Printf("[Bot] Summary generation cancelled for room '%s'", roomTopic)
+			logging.Info("Summary generation cancelled", zap.String("room", roomTopic))
 			return
 		}
-		log.Printf("❌ [Bot] Error generating summary for room '%s': %v", roomTopic, err)
+		logging.Error("Error generating summary", zap.String("room", roomTopic), zap.Error(err))
 		return
 	}
 
 	if result.SkipReason != "" {
-		log.Printf("[Bot] Summary skipped for room '%s' (%s)", roomTopic, result.SkipReason)
+		logging.Info("Summary skipped", zap.String("room", roomTopic), zap.String("reason", result.SkipReason))
 		b.buffer.Clear(roomTopic)
 		return
 	}
 
 	if sendErr := b.sendToSelf(result.Text); sendErr != nil {
-		log.Printf("❌ [Bot] Error sending summary: %v", sendErr)
+		logging.Error("Error sending summary", zap.Error(sendErr))
 		return
 	}
 
 	b.buffer.Clear(roomTopic)
-	log.Printf("✅ [Bot] Summary sent successfully for room '%s'\n", roomTopic)
+	logging.Info("Summary sent successfully", zap.String("room", roomTopic))
 }
 
 func (b *Bot) sendToSelf(message string) error {
@@ -288,7 +330,7 @@ func (b *Bot) sendToSelf(message string) error {
 
 func (b *Bot) startIntervalTimer() {
 	intervalMinutes := config.GetConfig().SummaryTrigger.IntervalMinutes
-	log.Printf("⏱️  [Bot] Starting interval timer (%d minutes)", intervalMinutes)
+	logging.Info("Starting interval timer", zap.Int("interval", intervalMinutes))
 
 	ticker := time.NewTicker(time.Duration(intervalMinutes) * time.Minute)
 
@@ -297,20 +339,20 @@ func (b *Bot) startIntervalTimer() {
 		for {
 			select {
 			case <-ticker.C:
-				log.Println("\n [Bot] Interval timer triggered")
+				logging.Info("Interval timer triggered")
 				roomTopics := b.buffer.GetRoomTopics()
 				for _, topic := range roomTopics {
 					if b.buffer.ShouldSummarize(topic, false) {
-						log.Printf("[Bot] Processing scheduled summary for room: %s", topic)
+						logging.Info("Processing scheduled summary", zap.String("room", topic))
 						select {
 						case b.summaryQueue <- topic:
 						default:
-							log.Printf("[Bot] WARN: Summary queue is full, skipping scheduled summary for room '%s'", topic)
+							logging.Warn("Summary queue is full, skipping scheduled summary", zap.String("room", topic))
 						}
 					}
 				}
 			case <-b.stopTimer:
-				log.Println(" [Bot] Interval timer stopped")
+				logging.Info("Interval timer stopped")
 				return
 			}
 		}

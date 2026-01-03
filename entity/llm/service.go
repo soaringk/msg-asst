@@ -3,30 +3,73 @@ package llm
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"sync/atomic"
 
 	"github.com/fsnotify/fsnotify"
-	openai "github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/option"
-	"github.com/openai/openai-go/v3/shared"
+	"github.com/soaringk/wechat-meeting-scribe/entity/chat"
 	"github.com/soaringk/wechat-meeting-scribe/entity/config"
+	"github.com/soaringk/wechat-meeting-scribe/pkg/logging"
+	"go.uber.org/zap"
 )
 
 type Service struct {
-	client       atomic.Pointer[openai.Client]
-	model        atomic.Pointer[shared.ChatModel]
+	provider     atomic.Pointer[Provider]
 	systemPrompt atomic.Value
 	watcher      *fsnotify.Watcher
 	stopWatcher  chan struct{}
 }
 
-type SummaryRequest struct {
-	RoomTopic    string
-	TimeRange    string
-	Messages     []string
+func New() *Service {
+	s := &Service{
+		stopWatcher: make(chan struct{}),
+	}
+
+	if err := s.loadSystemPrompt(); err != nil {
+		logging.Fatal("Failed to load initial system prompt", zap.Error(err))
+	}
+
+	s.recreateProvider()
+
+	config.OnConfigChange(func() {
+		logging.Info("Config changed, recreating LLM provider")
+		s.recreateProvider()
+	})
+
+	s.startSystemPromptWatcher()
+
+	return s
+}
+
+func (s *Service) recreateProvider() {
+	cfg := config.GetConfig()
+	providerType := cfg.GetEffectiveProvider()
+
+	var p Provider
+	var err error
+
+	if providerType == "gemini" {
+		p, err = NewGeminiProvider(context.Background(), GeminiConfig{
+			APIKey: cfg.LLMAPIKey,
+			Model:  cfg.LLMModel,
+		})
+	} else {
+		// Default to OpenAI
+		p = NewOpenAIProvider(OpenAIConfig{
+			APIKey:  cfg.LLMAPIKey,
+			BaseURL: cfg.LLMBaseURL,
+			Model:   cfg.LLMModel,
+		})
+	}
+
+	if err != nil {
+		logging.Error("Failed to create provider", zap.Error(err))
+		return
+	}
+
+	s.provider.Store(&p)
+	logging.Info("LLM provider active", zap.String("type", providerType))
 }
 
 func (s *Service) loadSystemPrompt() error {
@@ -39,7 +82,7 @@ func (s *Service) loadSystemPrompt() error {
 	prompt := strings.TrimSpace(string(systemPromptBytes))
 	s.systemPrompt.Store(prompt)
 
-	log.Printf("[LLM] System prompt loaded (%d chars)", len(prompt))
+	logging.Info("System prompt loaded", zap.Int("length", len(prompt)))
 	return nil
 }
 
@@ -47,46 +90,47 @@ func (s *Service) getSystemPrompt() string {
 	return s.systemPrompt.Load().(string)
 }
 
-func (s *Service) createClient() {
-	cfg := config.GetConfig()
-	client := openai.NewClient(
-		option.WithAPIKey(cfg.LLMAPIKey),
-		option.WithBaseURL(cfg.LLMBaseURL),
+func (s *Service) GenerateSummary(ctx context.Context, roomTopic string, timeRange string, messageCount int, messages []*chat.Content) (string, error) {
+	p := s.provider.Load()
+	if p == nil {
+		return "", fmt.Errorf("provider not initialized")
+	}
+
+	// Prepare the preamble text
+	preamble := fmt.Sprintf(
+		"群聊名称：%s\n消息时间范围：%s\n消息数量：%d\n\n请基于以下消息生成纪要，只输出结果本身：\n<messages>\n",
+		roomTopic, timeRange, messageCount,
 	)
-	s.client.Store(&client)
 
-	model := shared.ChatModel(cfg.LLMModel)
-	s.model.Store(&model)
-
-	log.Printf("[LLM] Client created with model: %s, base URL: %s", cfg.LLMModel, cfg.LLMBaseURL)
-}
-
-func New() *Service {
-	s := &Service{
-		stopWatcher: make(chan struct{}),
-	}
-
-	s.createClient()
-
-	if err := s.loadSystemPrompt(); err != nil {
-		log.Fatalf("[LLM] Failed to load initial system prompt: %v", err)
-	}
-
-	config.OnConfigChange(func() {
-		log.Println("[LLM] Config changed, recreating client...")
-		s.createClient()
+	var requestContents []*chat.Content
+	requestContents = append(requestContents, &chat.Content{
+		Type: chat.ContentTypeText,
+		Text: preamble,
 	})
 
+	// Append actual messages
+	requestContents = append(requestContents, messages...)
+
+	// Append closing tag
+	requestContents = append(requestContents, &chat.Content{
+		Type: chat.ContentTypeText,
+		Text: "\n</messages>",
+	})
+
+	return (*p).GenerateContent(ctx, s.getSystemPrompt(), requestContents)
+}
+
+func (s *Service) startSystemPromptWatcher() {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Fatalf("[LLM] Failed to create file watcher: %v", err)
+		logging.Fatal("Failed to create file watcher", zap.Error(err))
 	}
 	s.watcher = watcher
 
 	cfg := config.GetConfig()
 	if err := watcher.Add(cfg.SystemPromptFile); err != nil {
 		watcher.Close()
-		log.Fatalf("[LLM] Failed to watch system prompt file: %v", err)
+		logging.Fatal("Failed to watch system prompt file", zap.Error(err))
 	}
 
 	go func() {
@@ -95,30 +139,25 @@ func New() *Service {
 			select {
 			case event, ok := <-watcher.Events:
 				if !ok {
-					log.Println("[LLM] File watcher events channel closed")
 					return
 				}
 				if event.Has(fsnotify.Write) {
-					log.Printf("[LLM] System prompt file changed, reloading...")
+					logging.Info("System prompt file changed, reloading...")
 					if err := s.loadSystemPrompt(); err != nil {
-						log.Printf("[LLM] Error reloading system prompt: %v", err)
+						logging.Error("Error reloading system prompt", zap.Error(err))
 					}
 				}
 			case err, ok := <-watcher.Errors:
 				if !ok {
-					log.Println("[LLM] File watcher errors channel closed")
 					return
 				}
-				log.Printf("[LLM] File watcher error: %v", err)
+				logging.Error("File watcher error", zap.Error(err))
 			case <-s.stopWatcher:
-				log.Println("[LLM] File watcher stopped")
 				return
 			}
 		}
 	}()
-
-	log.Printf("[LLM] File watcher started for: %s", cfg.SystemPromptFile)
-	return s
+	logging.Debug("File watcher started", zap.String("file", cfg.SystemPromptFile))
 }
 
 func (s *Service) Close() {
@@ -126,56 +165,4 @@ func (s *Service) Close() {
 	if s.watcher != nil {
 		s.watcher.Close()
 	}
-}
-
-func (s *Service) GenerateSummary(ctx context.Context, roomTopic, timeRange string, messageCount int, messages []string) (string, error) {
-	systemPrompt := s.getSystemPrompt()
-	client := s.client.Load()
-	model := s.model.Load()
-
-	req := SummaryRequest{
-		RoomTopic: roomTopic,
-		TimeRange: timeRange,
-		Messages:  messages,
-	}
-	userPrompt := s.buildUserPrompt(req)
-
-	log.Printf("[LLM] Sending request to %s...", *model)
-
-	resp, err := client.Chat.Completions.New(
-		ctx,
-		openai.ChatCompletionNewParams{
-			Model: *model,
-			Messages: []openai.ChatCompletionMessageParamUnion{
-				openai.SystemMessage(systemPrompt),
-				openai.UserMessage(userPrompt),
-			},
-		},
-	)
-
-	if err != nil {
-		log.Printf("[LLM] Error: %v", err)
-		return "", fmt.Errorf("LLM service error: %w", err)
-	}
-
-	if len(resp.Choices) == 0 {
-		log.Println("[LLM] No content in response")
-		return "", fmt.Errorf("no response from LLM")
-	}
-
-	content := resp.Choices[0].Message.Content
-	log.Printf("[LLM] Response received (%d chars)", len(content))
-
-	return content, nil
-}
-
-func (s *Service) buildUserPrompt(req SummaryRequest) string {
-	conversationText := strings.Join(req.Messages, "\n")
-	return fmt.Sprintf(
-		"群聊名称：%s\n消息时间范围：%s\n消息数量：%d\n\n请基于以下消息生成纪要，只输出结果本身：\n<messages>\n%s\n</messages>",
-		req.RoomTopic,
-		req.TimeRange,
-		len(req.Messages),
-		conversationText,
-	)
 }

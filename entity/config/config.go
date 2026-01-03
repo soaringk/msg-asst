@@ -3,7 +3,6 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -12,7 +11,20 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/joho/godotenv"
+	"github.com/soaringk/wechat-meeting-scribe/pkg/logging"
+	"go.uber.org/zap"
 )
+
+type MediaSupportConfig struct {
+	ImageEnabled  bool
+	VideoEnabled  bool
+	AudioEnabled  bool
+	PDFEnabled    bool
+	MaxImageBytes int64
+	MaxVideoBytes int64
+	MaxAudioBytes int64
+	MaxPDFBytes   int64
+}
 
 type SummaryTriggerConfig struct {
 	IntervalMinutes       int
@@ -25,9 +37,11 @@ type Config struct {
 	LLMAPIKey        string
 	LLMBaseURL       string
 	LLMModel         string
+	LLMProvider      string // "auto", "openai", or "gemini"
 	SystemPromptFile string
 	BotName          string
 	SummaryTrigger   SummaryTriggerConfig
+	MediaSupport     MediaSupportConfig
 	MaxBufferSize    int
 	SummaryQueueSize int
 }
@@ -49,13 +63,34 @@ func GetConfig() *Config {
 	return configPtr.Load()
 }
 
-// GetTargetRooms returns the current target rooms (thread-safe)
 func GetTargetRooms() []string {
 	rooms := targetRooms.Load()
 	if rooms == nil {
 		return nil
 	}
 	return *rooms
+}
+
+func (c *Config) GetEffectiveProvider() string {
+	if c.LLMProvider != "auto" {
+		return c.LLMProvider
+	}
+	url := strings.ToLower(c.LLMBaseURL)
+	model := strings.ToLower(c.LLMModel)
+
+	if strings.Contains(url, "generativelanguage.googleapis.com") {
+		if strings.Contains(url, "/openai") {
+			return "openai"
+		}
+		return "gemini"
+	}
+	if strings.Contains(url, "openai.com") {
+		return "openai"
+	}
+	if strings.Contains(model, "gemini") {
+		return "openai"
+	}
+	return "openai"
 }
 
 // OnConfigChange registers a callback to be called when config changes
@@ -82,7 +117,7 @@ func Load() error {
 	}
 
 	if err := LoadRooms(); err != nil {
-		log.Printf("[Config] No rooms.json found, will use all rooms: %v", err)
+		logging.Warn("No rooms.json found", zap.Error(err))
 	}
 
 	if err := startConfigWatcher(); err != nil {
@@ -90,7 +125,7 @@ func Load() error {
 	}
 
 	if err := startRoomsWatcher(); err != nil {
-		log.Printf("[Config] Warning: rooms watcher not started: %v", err)
+		logging.Warn("Rooms watcher not started", zap.Error(err))
 	}
 
 	return nil
@@ -99,13 +134,14 @@ func Load() error {
 // Parse reads .env and updates config atomically
 func Parse() error {
 	if err := godotenv.Load(); err != nil {
-		log.Println("[Config] No .env file found, using environment variables")
+		logging.Info("No .env file found, using environment variables")
 	}
 
 	cfg := &Config{
 		LLMAPIKey:        getEnv("LLM_API_KEY", ""),
 		LLMBaseURL:       getEnv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"),
 		LLMModel:         getEnv("LLM_MODEL", "gemini-2.5-flash"),
+		LLMProvider:      getEnv("LLM_PROVIDER", "auto"),
 		SystemPromptFile: getEnv("SYSTEM_PROMPT_FILE", "system_prompt.txt"),
 		BotName:          getEnv("BOT_NAME", "meeting-minutes-bot"),
 		SummaryTrigger: SummaryTriggerConfig{
@@ -113,6 +149,16 @@ func Parse() error {
 			MessageCount:          getEnvInt("SUMMARY_MESSAGE_COUNT", 50),
 			Keyword:               getEnv("SUMMARY_KEYWORD", "@bot 总结"),
 			MinMessagesForSummary: getEnvInt("MIN_MESSAGES_FOR_SUMMARY", 5),
+		},
+		MediaSupport: MediaSupportConfig{
+			ImageEnabled:  getEnvBool("MEDIA_IMAGE_ENABLED", true),
+			VideoEnabled:  getEnvBool("MEDIA_VIDEO_ENABLED", true),
+			AudioEnabled:  getEnvBool("MEDIA_AUDIO_ENABLED", true),
+			PDFEnabled:    getEnvBool("MEDIA_PDF_ENABLED", true),
+			MaxImageBytes: getEnvInt64("MEDIA_MAX_IMAGE_BYTES", 10*1024*1024),
+			MaxVideoBytes: getEnvInt64("MEDIA_MAX_VIDEO_BYTES", 20*1024*1024),
+			MaxAudioBytes: getEnvInt64("MEDIA_MAX_AUDIO_BYTES", 10*1024*1024),
+			MaxPDFBytes:   getEnvInt64("MEDIA_MAX_PDF_BYTES", 10*1024*1024),
 		},
 		MaxBufferSize:    getEnvInt("MAX_BUFFER_SIZE", 200),
 		SummaryQueueSize: getEnvInt("CONCURRENT_SUMMARY", 10),
@@ -139,7 +185,7 @@ func LoadRooms() error {
 	}
 
 	targetRooms.Store(&rooms)
-	log.Printf("[Config] Loaded %d target rooms from rooms.json", len(rooms))
+	logging.Info("Loaded target rooms from rooms.json", zap.Int("count", len(rooms)))
 	return nil
 }
 
@@ -155,7 +201,7 @@ func SaveRooms(rooms []string) error {
 	}
 
 	targetRooms.Store(&rooms)
-	log.Printf("[Config] Saved %d rooms to rooms.json", len(rooms))
+	logging.Info("Saved rooms to rooms.json", zap.Int("count", len(rooms)))
 	return nil
 }
 
@@ -180,11 +226,11 @@ func startConfigWatcher() error {
 					return
 				}
 				if event.Has(fsnotify.Write) {
-					log.Println("[Config] .env changed, reloading...")
+					logging.Info(".env changed, reloading...")
 					if err := Parse(); err != nil {
-						log.Printf("[Config] Error reloading config: %v", err)
+						logging.Error("Error reloading config", zap.Error(err))
 					} else {
-						log.Println("[Config] Config reloaded successfully")
+						logging.Info("Config reloaded successfully")
 						notifyConfigCallbacks()
 					}
 				}
@@ -192,14 +238,14 @@ func startConfigWatcher() error {
 				if !ok {
 					return
 				}
-				log.Printf("[Config] Watcher error: %v", err)
+				logging.Error("Watcher error", zap.Error(err))
 			case <-stopWatchers:
 				return
 			}
 		}
 	}()
 
-	log.Println("[Config] Watching .env for changes")
+	logging.Info("Watching .env for changes")
 	return nil
 }
 
@@ -228,23 +274,23 @@ func startRoomsWatcher() error {
 					return
 				}
 				if event.Has(fsnotify.Write) {
-					log.Println("[Config] rooms.json changed, reloading...")
+					logging.Info("rooms.json changed, reloading...")
 					if err := LoadRooms(); err != nil {
-						log.Printf("[Config] Error reloading rooms: %v", err)
+						logging.Error("Error reloading rooms", zap.Error(err))
 					}
 				}
 			case err, ok := <-watcher.Errors:
 				if !ok {
 					return
 				}
-				log.Printf("[Config] Rooms watcher error: %v", err)
+				logging.Error("Rooms watcher error", zap.Error(err))
 			case <-stopWatchers:
 				return
 			}
 		}
 	}()
 
-	log.Println("[Config] Watching rooms.json for changes")
+	logging.Info("Watching rooms.json for changes")
 	return nil
 }
 
@@ -263,40 +309,28 @@ func (c *Config) validate() error {
 		return fmt.Errorf("SYSTEM_PROMPT_FILE is required")
 	}
 	if c.SummaryQueueSize <= 0 {
-		log.Printf("[Config] Invalid SummaryQueueSize: %d", c.SummaryQueueSize)
+		logging.Warn("Invalid SummaryQueueSize", zap.Int("size", c.SummaryQueueSize))
 	}
 
-	log.Println("✓ Configuration loaded successfully")
-	log.Printf("  - Bot name: %s", c.BotName)
-	log.Printf("  - LLM base URL: %s", c.LLMBaseURL)
-	log.Printf("  - LLM model: %s", c.LLMModel)
-	log.Printf("  - System prompt file: %s", c.SystemPromptFile)
+	logging.Info("Configuration loaded successfully")
+	logging.Info("Bot settings",
+		zap.String("name", c.BotName),
+		zap.String("model", c.LLMModel),
+		zap.String("baseURL", c.LLMBaseURL),
+		zap.String("promptFile", c.SystemPromptFile))
 
 	rooms := GetTargetRooms()
 	if len(rooms) > 0 {
-		log.Printf("  - Target rooms: %s", strings.Join(rooms, ", "))
+		logging.Info("Target rooms", zap.Strings("rooms", rooms))
 	} else {
-		log.Println("  - Target rooms: All rooms")
+		logging.Info("Target rooms: All")
 	}
 
-	log.Println("  - Summary triggers:")
-	if c.SummaryTrigger.IntervalMinutes > 0 {
-		log.Printf("    • Time-based: every %d minutes", c.SummaryTrigger.IntervalMinutes)
-	} else {
-		log.Println("    • Time-based: disabled")
-	}
-
-	if c.SummaryTrigger.MessageCount > 0 {
-		log.Printf("    • Volume-based: every %d messages", c.SummaryTrigger.MessageCount)
-	} else {
-		log.Println("    • Volume-based: disabled")
-	}
-
-	if c.SummaryTrigger.Keyword != "" {
-		log.Printf("    • Keyword: %s", c.SummaryTrigger.Keyword)
-	} else {
-		log.Println("    • Keyword: disabled")
-	}
+	logging.Info("Summary triggers",
+		zap.Int("interval", c.SummaryTrigger.IntervalMinutes),
+		zap.Int("messageCount", c.SummaryTrigger.MessageCount),
+		zap.Int("minMessages", c.SummaryTrigger.MinMessagesForSummary),
+		zap.String("keyword", c.SummaryTrigger.Keyword))
 
 	return nil
 }
@@ -316,8 +350,43 @@ func getEnvInt(key string, defaultValue int) int {
 	}
 	intValue, err := strconv.Atoi(value)
 	if err != nil {
-		log.Printf("Warning: Invalid integer value for %s, using default %d", key, defaultValue)
+		logging.Warn("Invalid integer value, using default",
+			zap.String("key", key),
+			zap.Int("default", defaultValue),
+			zap.Error(err))
 		return defaultValue
 	}
 	return intValue
+}
+
+func getEnvInt64(key string, defaultValue int64) int64 {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	intValue, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		logging.Warn("Invalid int64 value, using default",
+			zap.String("key", key),
+			zap.Int64("default", defaultValue),
+			zap.Error(err))
+		return defaultValue
+	}
+	return intValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	boolValue, err := strconv.ParseBool(value)
+	if err != nil {
+		logging.Warn("Invalid boolean value, using default",
+			zap.String("key", key),
+			zap.Bool("default", defaultValue),
+			zap.Error(err))
+		return defaultValue
+	}
+	return boolValue
 }

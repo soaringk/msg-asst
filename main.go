@@ -2,23 +2,24 @@ package main
 
 import (
 	"flag"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/soaringk/wechat-meeting-scribe/entity/config"
 	"github.com/soaringk/wechat-meeting-scribe/logic/bot"
+	"github.com/soaringk/wechat-meeting-scribe/pkg/logging"
+	"go.uber.org/zap"
 )
 
 func main() {
-	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+	defer logging.Sync()
 
 	selectRooms := flag.Bool("select-rooms", false, "Interactive room selection mode")
 	flag.Parse()
 
 	if err := config.Load(); err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		logging.Fatal("Failed to load configuration", zap.Error(err))
 	}
 
 	b := bot.New()
@@ -28,13 +29,13 @@ func main() {
 
 	go func() {
 		sig := <-sigChan
-		log.Printf("\n\n🛑 Received %v, shutting down gracefully...", sig)
+		logging.Info("Shutting down gracefully", zap.Any("signal", sig))
 		b.Stop()
 		os.Exit(0)
 	}()
 
 	if err := b.Start(*selectRooms); err != nil {
-		log.Fatalf("Fatal error: %v", err)
+		logging.Fatal("Fatal error", zap.Error(err))
 	}
 	b.Stop()
 }
