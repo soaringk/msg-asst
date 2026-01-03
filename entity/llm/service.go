@@ -16,15 +16,16 @@ import (
 )
 
 type Service struct {
-	client       openai.Client
-	model        shared.ChatModel
+	client       atomic.Pointer[openai.Client]
+	model        atomic.Pointer[shared.ChatModel]
 	systemPrompt atomic.Value
 	watcher      *fsnotify.Watcher
 	stopWatcher  chan struct{}
 }
 
 func (s *Service) loadSystemPrompt() error {
-	systemPromptBytes, err := os.ReadFile(config.AppConfig.SystemPromptFile)
+	cfg := config.GetConfig()
+	systemPromptBytes, err := os.ReadFile(cfg.SystemPromptFile)
 	if err != nil {
 		return fmt.Errorf("failed to read system prompt: %w", err)
 	}
@@ -40,19 +41,35 @@ func (s *Service) getSystemPrompt() string {
 	return s.systemPrompt.Load().(string)
 }
 
+func (s *Service) createClient() {
+	cfg := config.GetConfig()
+	client := openai.NewClient(
+		option.WithAPIKey(cfg.LLMAPIKey),
+		option.WithBaseURL(cfg.LLMBaseURL),
+	)
+	s.client.Store(&client)
+
+	model := shared.ChatModel(cfg.LLMModel)
+	s.model.Store(&model)
+
+	log.Printf("[LLM] Client created with model: %s, base URL: %s", cfg.LLMModel, cfg.LLMBaseURL)
+}
+
 func New() *Service {
 	s := &Service{
-		client: openai.NewClient(
-			option.WithAPIKey(config.AppConfig.LLMAPIKey),
-			option.WithBaseURL(config.AppConfig.LLMBaseURL),
-		),
-		model:       shared.ChatModel(config.AppConfig.LLMModel),
 		stopWatcher: make(chan struct{}),
 	}
+
+	s.createClient()
 
 	if err := s.loadSystemPrompt(); err != nil {
 		log.Fatalf("[LLM] Failed to load initial system prompt: %v", err)
 	}
+
+	config.OnConfigChange(func() {
+		log.Println("[LLM] Config changed, recreating client...")
+		s.createClient()
+	})
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -60,7 +77,8 @@ func New() *Service {
 	}
 	s.watcher = watcher
 
-	if err := watcher.Add(config.AppConfig.SystemPromptFile); err != nil {
+	cfg := config.GetConfig()
+	if err := watcher.Add(cfg.SystemPromptFile); err != nil {
 		watcher.Close()
 		log.Fatalf("[LLM] Failed to watch system prompt file: %v", err)
 	}
@@ -93,7 +111,7 @@ func New() *Service {
 		}
 	}()
 
-	log.Printf("[LLM] File watcher started for: %s", config.AppConfig.SystemPromptFile)
+	log.Printf("[LLM] File watcher started for: %s", cfg.SystemPromptFile)
 	return s
 }
 
@@ -106,16 +124,18 @@ func (s *Service) Close() {
 
 func (s *Service) GenerateSummary(ctx context.Context, messages []string) (string, error) {
 	systemPrompt := s.getSystemPrompt()
+	client := s.client.Load()
+	model := s.model.Load()
 
 	conversationText := strings.Join(messages, "\n")
 	userPrompt := fmt.Sprintf("请为以下群聊消息生成会议纪要：\n\n%s", conversationText)
 
-	log.Printf("[LLM] Sending request to %s...", s.model)
+	log.Printf("[LLM] Sending request to %s...", *model)
 
-	resp, err := s.client.Chat.Completions.New(
+	resp, err := client.Chat.Completions.New(
 		ctx,
 		openai.ChatCompletionNewParams{
-			Model: s.model,
+			Model: *model,
 			Messages: []openai.ChatCompletionMessageParamUnion{
 				openai.SystemMessage(systemPrompt),
 				openai.UserMessage(userPrompt),

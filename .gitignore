@@ -4,6 +4,9 @@
 # Hot login storage
 storage.json
 
+# Room selection (user-specific)
+rooms.json
+
 # Logs
 *.log
 logs/

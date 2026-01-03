@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"os"
 	"os/signal"
@@ -12,6 +13,10 @@ import (
 
 func main() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+
+	selectRooms := flag.Bool("select-rooms", false, "Interactive room selection mode")
+	flag.Parse()
+
 	if err := config.Load(); err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
@@ -28,7 +33,7 @@ func main() {
 		os.Exit(0)
 	}()
 
-	if err := b.Start(); err != nil {
+	if err := b.Start(*selectRooms); err != nil {
 		log.Fatalf("Fatal error: %v", err)
 	}
 	b.Stop()

@@ -1,12 +1,16 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/joho/godotenv"
 )
 
@@ -23,20 +27,82 @@ type Config struct {
 	LLMModel         string
 	SystemPromptFile string
 	BotName          string
-	TargetRooms      []string
 	SummaryTrigger   SummaryTriggerConfig
 	MaxBufferSize    int
 	SummaryQueueSize int
 }
 
-var AppConfig *Config
+var (
+	configPtr       atomic.Pointer[Config]
+	targetRooms     atomic.Pointer[[]string]
+	configWatcher   *fsnotify.Watcher
+	roomsWatcher    *fsnotify.Watcher
+	callbacksMu     sync.RWMutex
+	configCallbacks []func()
+	stopWatchers    chan struct{}
+)
 
+const roomsFile = "rooms.json"
+
+// GetConfig returns the current config (thread-safe)
+func GetConfig() *Config {
+	return configPtr.Load()
+}
+
+// GetTargetRooms returns the current target rooms (thread-safe)
+func GetTargetRooms() []string {
+	rooms := targetRooms.Load()
+	if rooms == nil {
+		return nil
+	}
+	return *rooms
+}
+
+// OnConfigChange registers a callback to be called when config changes
+func OnConfigChange(callback func()) {
+	callbacksMu.Lock()
+	defer callbacksMu.Unlock()
+	configCallbacks = append(configCallbacks, callback)
+}
+
+func notifyConfigCallbacks() {
+	callbacksMu.RLock()
+	defer callbacksMu.RUnlock()
+	for _, cb := range configCallbacks {
+		go cb()
+	}
+}
+
+// Load initializes config, loads rooms, and starts file watchers
 func Load() error {
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, using environment variables")
+	stopWatchers = make(chan struct{})
+
+	if err := Parse(); err != nil {
+		return err
 	}
 
-	AppConfig = &Config{
+	if err := LoadRooms(); err != nil {
+		log.Printf("[Config] No rooms.json found, will use all rooms: %v", err)
+	}
+
+	if err := startConfigWatcher(); err != nil {
+		return fmt.Errorf("failed to start config watcher: %w", err)
+	}
+
+	if err := startRoomsWatcher(); err != nil {
+		log.Printf("[Config] Warning: rooms watcher not started: %v", err)
+	}
+
+	return nil
+}
+
+// Parse reads .env and updates config atomically
+func Parse() error {
+	if err := godotenv.Load(); err != nil {
+		log.Println("[Config] No .env file found, using environment variables")
+	}
+
+	cfg := &Config{
 		LLMAPIKey:        getEnv("LLM_API_KEY", ""),
 		LLMBaseURL:       getEnv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"),
 		LLMModel:         getEnv("LLM_MODEL", "gemini-2.5-flash"),
@@ -52,22 +118,141 @@ func Load() error {
 		SummaryQueueSize: getEnvInt("CONCURRENT_SUMMARY", 10),
 	}
 
-	targetRoomsStr := getEnv("TARGET_ROOMS", "")
-	if targetRoomsStr != "" {
-		rooms := strings.Split(targetRoomsStr, ",")
-		for _, room := range rooms {
-			trimmed := strings.TrimSpace(room)
-			if trimmed != "" {
-				AppConfig.TargetRooms = append(AppConfig.TargetRooms, trimmed)
-			}
-		}
-	}
-
-	if err := AppConfig.validate(); err != nil {
+	if err := cfg.validate(); err != nil {
 		return err
 	}
 
+	configPtr.Store(cfg)
 	return nil
+}
+
+// LoadRooms loads target rooms from rooms.json
+func LoadRooms() error {
+	data, err := os.ReadFile(roomsFile)
+	if err != nil {
+		return err
+	}
+
+	var rooms []string
+	if err := json.Unmarshal(data, &rooms); err != nil {
+		return fmt.Errorf("failed to parse rooms.json: %w", err)
+	}
+
+	targetRooms.Store(&rooms)
+	log.Printf("[Config] Loaded %d target rooms from rooms.json", len(rooms))
+	return nil
+}
+
+// SaveRooms saves target rooms to rooms.json
+func SaveRooms(rooms []string) error {
+	data, err := json.MarshalIndent(rooms, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal rooms: %w", err)
+	}
+
+	if err := os.WriteFile(roomsFile, data, 0644); err != nil {
+		return fmt.Errorf("failed to write rooms.json: %w", err)
+	}
+
+	targetRooms.Store(&rooms)
+	log.Printf("[Config] Saved %d rooms to rooms.json", len(rooms))
+	return nil
+}
+
+func startConfigWatcher() error {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return err
+	}
+	configWatcher = watcher
+
+	if err := watcher.Add(".env"); err != nil {
+		watcher.Close()
+		return fmt.Errorf("failed to watch .env: %w", err)
+	}
+
+	go func() {
+		defer watcher.Close()
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if event.Has(fsnotify.Write) {
+					log.Println("[Config] .env changed, reloading...")
+					if err := Parse(); err != nil {
+						log.Printf("[Config] Error reloading config: %v", err)
+					} else {
+						log.Println("[Config] Config reloaded successfully")
+						notifyConfigCallbacks()
+					}
+				}
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				log.Printf("[Config] Watcher error: %v", err)
+			case <-stopWatchers:
+				return
+			}
+		}
+	}()
+
+	log.Println("[Config] Watching .env for changes")
+	return nil
+}
+
+func startRoomsWatcher() error {
+	if _, err := os.Stat(roomsFile); os.IsNotExist(err) {
+		return nil
+	}
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return err
+	}
+	roomsWatcher = watcher
+
+	if err := watcher.Add(roomsFile); err != nil {
+		watcher.Close()
+		return fmt.Errorf("failed to watch rooms.json: %w", err)
+	}
+
+	go func() {
+		defer watcher.Close()
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if event.Has(fsnotify.Write) {
+					log.Println("[Config] rooms.json changed, reloading...")
+					if err := LoadRooms(); err != nil {
+						log.Printf("[Config] Error reloading rooms: %v", err)
+					}
+				}
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				log.Printf("[Config] Rooms watcher error: %v", err)
+			case <-stopWatchers:
+				return
+			}
+		}
+	}()
+
+	log.Println("[Config] Watching rooms.json for changes")
+	return nil
+}
+
+// StopWatchers stops all file watchers
+func StopWatchers() {
+	if stopWatchers != nil {
+		close(stopWatchers)
+	}
 }
 
 func (c *Config) validate() error {
@@ -78,7 +263,7 @@ func (c *Config) validate() error {
 		return fmt.Errorf("SYSTEM_PROMPT_FILE is required")
 	}
 	if c.SummaryQueueSize <= 0 {
-		log.Printf("[Bot] Invalid SummaryQueueSize: %d", c.SummaryQueueSize)
+		log.Printf("[Config] Invalid SummaryQueueSize: %d", c.SummaryQueueSize)
 	}
 
 	log.Println("✓ Configuration loaded successfully")
@@ -87,8 +272,9 @@ func (c *Config) validate() error {
 	log.Printf("  - LLM model: %s", c.LLMModel)
 	log.Printf("  - System prompt file: %s", c.SystemPromptFile)
 
-	if len(c.TargetRooms) > 0 {
-		log.Printf("  - Target rooms: %s", strings.Join(c.TargetRooms, ", "))
+	rooms := GetTargetRooms()
+	if len(rooms) > 0 {
+		log.Printf("  - Target rooms: %s", strings.Join(rooms, ", "))
 	} else {
 		log.Println("  - Target rooms: All rooms")
 	}

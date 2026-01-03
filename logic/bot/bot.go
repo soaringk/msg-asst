@@ -1,9 +1,12 @@
 package bot
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,17 +37,16 @@ func New() *Bot {
 		buffer:       buffer.New(),
 		generator:    summary.New(),
 		stopTimer:    make(chan struct{}),
-		summaryQueue: make(chan string, config.AppConfig.SummaryQueueSize),
+		summaryQueue: make(chan string, config.GetConfig().SummaryQueueSize),
 		ctx:          ctx,
 		cancel:       cancel,
 	}
 }
 
-func (b *Bot) Start() error {
+func (b *Bot) Start(selectRooms bool) error {
 	log.Println("🤖 Initializing WeChat Meeting Scribe...")
 
 	b.bot.UUIDCallback = openwechat.PrintlnQrcodeUrl
-
 	b.bot.MessageHandler = b.handleMessage
 
 	reloadStorage := openwechat.NewFileHotReloadStorage("storage.json")
@@ -67,15 +69,88 @@ func (b *Bot) Start() error {
 	b.self = self
 
 	log.Printf("\n✅ User %s logged in successfully!", self.NickName)
+
+	if selectRooms {
+		if err := b.promptRoomSelection(); err != nil {
+			return fmt.Errorf("room selection failed: %w", err)
+		}
+	}
+
 	log.Println("   [Bot] Bot is now active and monitoring messages.")
 
 	go b.summaryWorker()
 
-	if config.AppConfig.SummaryTrigger.IntervalMinutes > 0 {
+	if config.GetConfig().SummaryTrigger.IntervalMinutes > 0 {
 		b.startIntervalTimer()
 	}
 
 	b.bot.Block()
+	return nil
+}
+
+func (b *Bot) promptRoomSelection() error {
+	groups, err := b.self.Groups()
+	if err != nil {
+		return fmt.Errorf("failed to get groups: %w", err)
+	}
+
+	if len(groups) == 0 {
+		log.Println("No groups found.")
+		return nil
+	}
+
+	fmt.Println("\n📋 Available Groups:")
+	for i, group := range groups {
+		fmt.Printf("   [%d] %s\n", i+1, group.NickName)
+	}
+
+	fmt.Println("\nEnter room numbers (comma-separated), or 'all':")
+	fmt.Print("> ")
+
+	reader := bufio.NewReader(os.Stdin)
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read input: %w", err)
+	}
+	input = strings.TrimSpace(input)
+
+	var selectedRooms []string
+
+	if strings.ToLower(input) == "all" {
+		for _, group := range groups {
+			selectedRooms = append(selectedRooms, group.NickName)
+		}
+		log.Printf("✅ Selected all %d rooms", len(selectedRooms))
+	} else {
+		parts := strings.Split(input, ",")
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			num, err := strconv.Atoi(part)
+			if err != nil || num < 1 || num > len(groups) {
+				log.Printf("⚠️  Invalid selection: %s (skipping)", part)
+				continue
+			}
+			selectedRooms = append(selectedRooms, groups[num-1].NickName)
+		}
+	}
+
+	if len(selectedRooms) == 0 {
+		log.Println("No rooms selected, will monitor all rooms.")
+		return nil
+	}
+
+	if err := config.SaveRooms(selectedRooms); err != nil {
+		return fmt.Errorf("failed to save rooms: %w", err)
+	}
+
+	fmt.Printf("\n✅ Saved %d rooms to rooms.json\n", len(selectedRooms))
+	for _, room := range selectedRooms {
+		fmt.Printf("   • %s\n", room)
+	}
+
 	return nil
 }
 
@@ -86,6 +161,7 @@ func (b *Bot) Stop() {
 		b.stopIntervalTimer()
 		close(b.summaryQueue)
 		b.generator.Close()
+		config.StopWatchers()
 		log.Println("[Bot] Bot stopped gracefully")
 	})
 }
@@ -143,12 +219,13 @@ func (b *Bot) handleMessage(msg *openwechat.Message) {
 }
 
 func (b *Bot) isTargetRoom(roomName string) bool {
-	if len(config.AppConfig.TargetRooms) == 0 {
+	targetRooms := config.GetTargetRooms()
+	if len(targetRooms) == 0 {
 		return true
 	}
 
 	roomNameLower := strings.ToLower(roomName)
-	for _, target := range config.AppConfig.TargetRooms {
+	for _, target := range targetRooms {
 		if strings.Contains(roomNameLower, strings.ToLower(target)) {
 			return true
 		}
@@ -157,10 +234,11 @@ func (b *Bot) isTargetRoom(roomName string) bool {
 }
 
 func (b *Bot) checkKeywordTrigger(text string) bool {
-	if config.AppConfig.SummaryTrigger.Keyword == "" {
+	keyword := config.GetConfig().SummaryTrigger.Keyword
+	if keyword == "" {
 		return false
 	}
-	return strings.Contains(text, config.AppConfig.SummaryTrigger.Keyword)
+	return strings.Contains(text, keyword)
 }
 
 func (b *Bot) summaryWorker() {
@@ -203,7 +281,7 @@ func (b *Bot) sendToSelf(message string) error {
 }
 
 func (b *Bot) startIntervalTimer() {
-	intervalMinutes := config.AppConfig.SummaryTrigger.IntervalMinutes
+	intervalMinutes := config.GetConfig().SummaryTrigger.IntervalMinutes
 	log.Printf("⏱️  [Bot] Starting interval timer (%d minutes)", intervalMinutes)
 
 	ticker := time.NewTicker(time.Duration(intervalMinutes) * time.Minute)

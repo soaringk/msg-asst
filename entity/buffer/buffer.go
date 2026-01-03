@@ -41,7 +41,7 @@ func New() *MessageBuffer {
 func (b *MessageBuffer) getOrCreateRoom(roomTopic string) *roomData {
 	room, ok := b.rooms.Get(roomTopic)
 	if !ok {
-		cap := config.AppConfig.MaxBufferSize
+		cap := config.GetConfig().MaxBufferSize
 		room = &roomData{
 			messages:   make([]BufferedMessage, cap),
 			capacity:   cap,
@@ -113,9 +113,11 @@ func (b *MessageBuffer) ShouldSummarize(roomTopic string, triggeredByKeyword boo
 	room.mu.Lock()
 	defer room.mu.Unlock()
 
-	if room.count < config.AppConfig.SummaryTrigger.MinMessagesForSummary {
+	cfg := config.GetConfig()
+
+	if room.count < cfg.SummaryTrigger.MinMessagesForSummary {
 		log.Printf("[Buffer] Not enough messages in room '%s' for summary (%d/%d)",
-			roomTopic, room.count, config.AppConfig.SummaryTrigger.MinMessagesForSummary)
+			roomTopic, room.count, cfg.SummaryTrigger.MinMessagesForSummary)
 		return false
 	}
 
@@ -124,19 +126,19 @@ func (b *MessageBuffer) ShouldSummarize(roomTopic string, triggeredByKeyword boo
 		return true
 	}
 
-	if config.AppConfig.SummaryTrigger.MessageCount > 0 &&
-		room.count >= config.AppConfig.SummaryTrigger.MessageCount {
+	if cfg.SummaryTrigger.MessageCount > 0 &&
+		room.count >= cfg.SummaryTrigger.MessageCount {
 		log.Printf("[Buffer] Summary triggered by message count in room '%s' (%d/%d)",
-			roomTopic, room.count, config.AppConfig.SummaryTrigger.MessageCount)
+			roomTopic, room.count, cfg.SummaryTrigger.MessageCount)
 		return true
 	}
 
-	if config.AppConfig.SummaryTrigger.IntervalMinutes > 0 {
+	if cfg.SummaryTrigger.IntervalMinutes > 0 {
 		if !room.lastSummaryTime.IsZero() {
 			minutesSinceLast := time.Since(room.lastSummaryTime).Minutes()
-			if minutesSinceLast >= float64(config.AppConfig.SummaryTrigger.IntervalMinutes) {
+			if minutesSinceLast >= float64(cfg.SummaryTrigger.IntervalMinutes) {
 				log.Printf("[Buffer] Summary triggered by time interval in room '%s' (%.1f/%d minutes)",
-					roomTopic, minutesSinceLast, config.AppConfig.SummaryTrigger.IntervalMinutes)
+					roomTopic, minutesSinceLast, cfg.SummaryTrigger.IntervalMinutes)
 				return true
 			}
 		}
