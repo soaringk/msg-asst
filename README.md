@@ -73,11 +73,13 @@ MIN_MESSAGES_FOR_SUMMARY=5
 # Message buffer settings
 MAX_BUFFER_SIZE=200
 
-# Media Support
+# Media Support (sizes: 10K, 10M, 10G)
 MEDIA_IMAGE_ENABLED=true
 MEDIA_VIDEO_ENABLED=true
 MEDIA_AUDIO_ENABLED=true
 MEDIA_PDF_ENABLED=true
+MEDIA_MAX_IMAGE_SIZE=10M
+MEDIA_MAX_VIDEO_SIZE=20M
 ```
 
 3. **Run the bot**
@@ -130,6 +132,21 @@ wechat-meeting-scribe/
 
 ### Modify System Prompt
 Edit `system_prompt.txt` to change how the bot summarizes meetings. This file is hot-reloaded, so you can tweak it while the bot is running.
+
+### Hot Reload Support
+
+The following can be changed without restarting the bot:
+
+| File/Setting | Hot Reload |
+|--------------|------------|
+| `.env` (most settings) | ✅ Yes |
+| `rooms.json` | ✅ Yes |
+| `system_prompt.txt` | ✅ Yes |
+| LLM Provider/Model/API Key | ✅ Yes |
+| Summary triggers (keyword, count) | ✅ Yes |
+| Media support settings | ✅ Yes |
+| `SUMMARY_INTERVAL_MINUTES` | ❌ No (timer set at startup) |
+| `MAX_BUFFER_SIZE` | ❌ No (affects new rooms only) |
 
 ## 🐛 Troubleshooting
 

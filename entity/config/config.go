@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -42,7 +43,6 @@ type Config struct {
 	SummaryTrigger   SummaryTriggerConfig
 	MediaSupport     MediaSupportConfig
 	MaxBufferSize    int
-	SummaryQueueSize int
 }
 
 var (
@@ -132,13 +132,12 @@ func Parse() error {
 			VideoEnabled:  getEnvBool("MEDIA_VIDEO_ENABLED", true),
 			AudioEnabled:  getEnvBool("MEDIA_AUDIO_ENABLED", true),
 			PDFEnabled:    getEnvBool("MEDIA_PDF_ENABLED", true),
-			MaxImageBytes: getEnvInt64("MEDIA_MAX_IMAGE_BYTES", 10*1024*1024),
-			MaxVideoBytes: getEnvInt64("MEDIA_MAX_VIDEO_BYTES", 20*1024*1024),
-			MaxAudioBytes: getEnvInt64("MEDIA_MAX_AUDIO_BYTES", 10*1024*1024),
-			MaxPDFBytes:   getEnvInt64("MEDIA_MAX_PDF_BYTES", 10*1024*1024),
+			MaxImageBytes: getEnvBytes("MEDIA_MAX_IMAGE_SIZE", 10*1024*1024),
+			MaxVideoBytes: getEnvBytes("MEDIA_MAX_VIDEO_SIZE", 20*1024*1024),
+			MaxAudioBytes: getEnvBytes("MEDIA_MAX_AUDIO_SIZE", 10*1024*1024),
+			MaxPDFBytes:   getEnvBytes("MEDIA_MAX_PDF_SIZE", 10*1024*1024),
 		},
-		MaxBufferSize:    getEnvInt("MAX_BUFFER_SIZE", 200),
-		SummaryQueueSize: getEnvInt("CONCURRENT_SUMMARY", 10),
+		MaxBufferSize: getEnvInt("MAX_BUFFER_SIZE", 200),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -285,9 +284,6 @@ func (c *Config) validate() error {
 	if c.SystemPromptFile == "" {
 		return fmt.Errorf("SYSTEM_PROMPT_FILE is required")
 	}
-	if c.SummaryQueueSize <= 0 {
-		logging.Warn("Invalid SummaryQueueSize", zap.Int("size", c.SummaryQueueSize))
-	}
 
 	logging.Info("Configuration loaded successfully")
 	logging.Info("Bot settings",
@@ -336,20 +332,68 @@ func getEnvInt(key string, defaultValue int) int {
 	return intValue
 }
 
-func getEnvInt64(key string, defaultValue int64) int64 {
+func getEnvBytes(key string, defaultValue int64) int64 {
 	value := os.Getenv(key)
 	if value == "" {
 		return defaultValue
 	}
-	intValue, err := strconv.ParseInt(value, 10, 64)
+	bytes, err := parseBytes(value)
 	if err != nil {
-		logging.Warn("Invalid int64 value, using default",
+		logging.Warn("Invalid byte size value, using default",
 			zap.String("key", key),
 			zap.Int64("default", defaultValue),
 			zap.Error(err))
 		return defaultValue
 	}
-	return intValue
+	return bytes
+}
+
+func parseBytes(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty value")
+	}
+
+	s = strings.ToUpper(s)
+	var multiplier int64 = 1
+	suffix := s[len(s)-1]
+
+	switch suffix {
+	case 'K':
+		multiplier = 1024
+		s = s[:len(s)-1]
+	case 'M':
+		multiplier = 1024 * 1024
+		s = s[:len(s)-1]
+	case 'G':
+		multiplier = 1024 * 1024 * 1024
+		s = s[:len(s)-1]
+	case 'B':
+		if len(s) >= 2 {
+			prev := s[len(s)-2]
+			switch prev {
+			case 'K':
+				multiplier = 1024
+				s = s[:len(s)-2]
+			case 'M':
+				multiplier = 1024 * 1024
+				s = s[:len(s)-2]
+			case 'G':
+				multiplier = 1024 * 1024 * 1024
+				s = s[:len(s)-2]
+			default:
+				s = s[:len(s)-1]
+			}
+		} else {
+			s = s[:len(s)-1]
+		}
+	}
+
+	val, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return val * multiplier, nil
 }
 
 func getEnvBool(key string, defaultValue bool) bool {

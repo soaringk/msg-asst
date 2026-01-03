@@ -19,28 +19,28 @@ import (
 )
 
 type Bot struct {
-	bot          *openwechat.Bot
-	buffer       *chat.MessageBuffer
-	generator    *summary.Generator
-	self         *openwechat.Self
-	stopTimer    chan struct{}
-	summaryQueue chan string
-	stopOnce     sync.Once
-	ctx          context.Context
-	cancel       context.CancelFunc
+	bot             *openwechat.Bot
+	buffer          *chat.MessageBuffer
+	generator       *summary.Generator
+	self            *openwechat.Self
+	stopTimer       chan struct{}
+	activeSummaries sync.Map // map[string]bool - tracks groups with in-progress summaries
+	stopOnce        sync.Once
+	ctx             context.Context
+	cancel          context.CancelFunc
+	wg              sync.WaitGroup
 }
 
 func New() *Bot {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Bot{
-		bot:          openwechat.DefaultBot(openwechat.Desktop),
-		buffer:       chat.New(),
-		generator:    summary.New(),
-		stopTimer:    make(chan struct{}),
-		summaryQueue: make(chan string, config.GetConfig().SummaryQueueSize),
-		ctx:          ctx,
-		cancel:       cancel,
+		bot:       openwechat.DefaultBot(openwechat.Desktop),
+		buffer:    chat.New(),
+		generator: summary.New(),
+		stopTimer: make(chan struct{}),
+		ctx:       ctx,
+		cancel:    cancel,
 	}
 }
 
@@ -78,8 +78,6 @@ func (b *Bot) Start(selectRooms bool) error {
 	}
 
 	logging.Info("Bot is now active and monitoring messages")
-
-	go b.summaryWorker()
 
 	if config.GetConfig().SummaryTrigger.IntervalMinutes > 0 {
 		b.startIntervalTimer()
@@ -160,7 +158,7 @@ func (b *Bot) Stop() {
 		logging.Info("Stopping bot...")
 		b.cancel()
 		b.stopIntervalTimer()
-		close(b.summaryQueue)
+		b.wg.Wait()
 		b.generator.Close()
 		config.StopWatchers()
 		logging.Info("Bot stopped gracefully")
@@ -219,10 +217,7 @@ func (b *Bot) handleMessage(msg *openwechat.Message) {
 	})
 
 	if b.buffer.ShouldSummarize(groupName, b.checkKeywordTrigger(extractedContent.Text)) {
-		select {
-		case b.summaryQueue <- groupName:
-		default:
-		}
+		b.triggerSummary(groupName)
 	}
 }
 
@@ -283,11 +278,17 @@ func (b *Bot) checkKeywordTrigger(text string) bool {
 	return strings.Contains(text, keyword)
 }
 
-func (b *Bot) summaryWorker() {
-	for roomTopic := range b.summaryQueue {
-		b.generateAndSendSummary(roomTopic)
+func (b *Bot) triggerSummary(roomTopic string) {
+	if _, loaded := b.activeSummaries.LoadOrStore(roomTopic, true); loaded {
+		return
 	}
-	logging.Info("Summary worker stopped")
+
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		defer b.activeSummaries.Delete(roomTopic)
+		b.generateAndSendSummary(roomTopic)
+	}()
 }
 
 func (b *Bot) generateAndSendSummary(roomTopic string) {
@@ -344,11 +345,7 @@ func (b *Bot) startIntervalTimer() {
 				for _, topic := range roomTopics {
 					if b.buffer.ShouldSummarize(topic, false) {
 						logging.Info("Processing scheduled summary", zap.String("room", topic))
-						select {
-						case b.summaryQueue <- topic:
-						default:
-							logging.Warn("Summary queue is full, skipping scheduled summary", zap.String("room", topic))
-						}
+						b.triggerSummary(topic)
 					}
 				}
 			case <-b.stopTimer:
