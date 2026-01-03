@@ -4,8 +4,8 @@
 # Hot login storage
 storage.json
 
-# Room selection (user-specific)
-rooms.json
+# Group selection (user-specific)
+groups.json
 
 # Logs
 *.log
@@ -24,8 +24,3 @@ Thumbs.db
 # Go build artifacts
 wechat-meeting-scribe
 wechat-meeting-scribe.exe
-
-# TypeScript build artifacts (legacy)
-node_modules/
-dist/
-*.tsbuildinfo

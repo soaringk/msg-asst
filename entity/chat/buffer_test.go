@@ -18,22 +18,22 @@ func TestSnapshotWithMedia(t *testing.T) {
 	buf := New()
 
 	buf.Add(Message{
-		ID:        "msg1",
-		Timestamp: time.Now(),
-		Sender:    "Alice",
-		RoomTopic: "TestRoom",
-		Content:   &Content{Type: ContentTypeText, Text: "Hello world"},
+		ID:         "msg1",
+		Timestamp:  time.Now(),
+		Sender:     "Alice",
+		GroupTopic: "TestGroup",
+		Content:    &Content{Type: ContentTypeText, Text: "Hello world"},
 	})
 
 	buf.Add(Message{
-		ID:        "msg2",
-		Timestamp: time.Now(),
-		Sender:    "Bob",
-		RoomTopic: "TestRoom",
-		Content:   &Content{Type: ContentTypeImage, Data: []byte{1, 2, 3}, MimeType: "image/jpeg"},
+		ID:         "msg2",
+		Timestamp:  time.Now(),
+		Sender:     "Bob",
+		GroupTopic: "TestGroup",
+		Content:    &Content{Type: ContentTypeImage, Data: []byte{1, 2, 3}, MimeType: "image/jpeg"},
 	})
 
-	snapshot := buf.GetSnapshot("TestRoom")
+	snapshot := buf.GetSnapshot("TestGroup")
 
 	if snapshot.Count != 2 {
 		t.Errorf("Expected count 2, got %d", snapshot.Count)
@@ -59,14 +59,14 @@ func TestSnapshotWithoutMedia(t *testing.T) {
 	buf := New()
 
 	buf.Add(Message{
-		ID:        "msg1",
-		Timestamp: time.Now(),
-		Sender:    "Alice",
-		RoomTopic: "TestRoom",
-		Content:   &Content{Type: ContentTypeText, Text: "Text only message"},
+		ID:         "msg1",
+		Timestamp:  time.Now(),
+		Sender:     "Alice",
+		GroupTopic: "TestGroup",
+		Content:    &Content{Type: ContentTypeText, Text: "Text only message"},
 	})
 
-	snapshot := buf.GetSnapshot("TestRoom")
+	snapshot := buf.GetSnapshot("TestGroup")
 
 	if snapshot.Count != 1 {
 		t.Errorf("Expected count 1, got %d", snapshot.Count)

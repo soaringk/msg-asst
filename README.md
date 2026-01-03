@@ -10,7 +10,7 @@ A real-time WeChat bot that automatically tracks and summarizes group discussion
 - **Flexible AI Backend**: Supports Google Gemini (native) and OpenAI-compatible providers
 - **Smart Summarization**: Uses LLM to generate structured meeting minutes
 - **Multiple Triggers**: Supports time-based, volume-based, and keyword triggers
-- **Hot Reload**: Update configuration and target rooms without restarting
+- **Hot Reload**: Update configuration and target groups without restarting
 
 ## 📋 Summary Format
 
@@ -90,11 +90,11 @@ go run main.go
 
 ### First Time Setup
 
-1. Run the bot with `go run main.go -select-rooms` to select groups to monitor.
+1. Run the bot with `go run main.go -select-groups` to select groups to monitor.
 2. Scan the QR code with WeChat (the URL will be printed in the console).
 3. Confirm login on your phone.
-4. Select the rooms you want the bot to track from the list.
-5. The bot will start monitoring selected rooms. The selection is saved to `rooms.json`.
+4. Select the groups you want the bot to track from the list.
+5. The bot will start monitoring selected groups. The selection is saved to `groups.json`.
 
 ## 🏗️ Project Structure
 
@@ -112,7 +112,7 @@ wechat-meeting-scribe/
 ├── pkg/
 │   └── logging/        # Structured logging (zap)
 ├── main.go             # Application entry point
-├── rooms.json          # Target rooms storage (auto-generated)
+├── groups.json          # Target groups storage (auto-generated)
 └── system_prompt.txt   # Customizable system prompt for LLM
 ```
 
@@ -140,18 +140,18 @@ The following can be changed without restarting the bot:
 | File/Setting | Hot Reload |
 |--------------|------------|
 | `.env` (most settings) | ✅ Yes |
-| `rooms.json` | ✅ Yes |
+| `groups.json` | ✅ Yes |
 | `system_prompt.txt` | ✅ Yes |
 | LLM Provider/Model/API Key | ✅ Yes |
 | Summary triggers (keyword, count) | ✅ Yes |
 | Media support settings | ✅ Yes |
 | `SUMMARY_INTERVAL_MINUTES` | ❌ No (timer set at startup) |
-| `MAX_BUFFER_SIZE` | ❌ No (affects new rooms only) |
+| `MAX_BUFFER_SIZE` | ❌ No (affects new groups only) |
 
 ## 🐛 Troubleshooting
 
 - **Login Issues**: If QR code scan fails, check your network. The bot behaves like a Desktop WeChat client.
-- **No Summary**: Ensure you have selected rooms using `-select-rooms`. Check `MIN_MESSAGES_FOR_SUMMARY`.
+- **No Summary**: Ensure you have selected groups using `-select-groups`. Check `MIN_MESSAGES_FOR_SUMMARY`.
 - **Logs**: Check console output. We use structured logging, so you can filter for errors easily.
 
 ## 🤝 Contributing

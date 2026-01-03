@@ -47,27 +47,27 @@ type Config struct {
 
 var (
 	configPtr       atomic.Pointer[Config]
-	targetRooms     atomic.Pointer[[]string]
+	targetGroups    atomic.Pointer[[]string]
 	configWatcher   *fsnotify.Watcher
-	roomsWatcher    *fsnotify.Watcher
+	groupsWatcher   *fsnotify.Watcher
 	callbacksMu     sync.RWMutex
 	configCallbacks []func()
 	stopWatchers    chan struct{}
 )
 
-const roomsFile = "rooms.json"
+const groupsFile = "groups.json"
 
 // GetConfig returns the current config (thread-safe)
 func GetConfig() *Config {
 	return configPtr.Load()
 }
 
-func GetTargetRooms() []string {
-	rooms := targetRooms.Load()
-	if rooms == nil {
+func GetTargetGroups() []string {
+	groups := targetGroups.Load()
+	if groups == nil {
 		return nil
 	}
-	return *rooms
+	return *groups
 }
 
 // OnConfigChange registers a callback to be called when config changes
@@ -85,7 +85,7 @@ func notifyConfigCallbacks() {
 	}
 }
 
-// Load initializes config, loads rooms, and starts file watchers
+// Load initializes config, loads groups, and starts file watchers
 func Load() error {
 	stopWatchers = make(chan struct{})
 
@@ -93,16 +93,16 @@ func Load() error {
 		return err
 	}
 
-	if err := LoadRooms(); err != nil {
-		logging.Warn("No rooms.json found", zap.Error(err))
+	if err := LoadGroups(); err != nil {
+		logging.Warn("No groups.json found", zap.Error(err))
 	}
 
 	if err := startConfigWatcher(); err != nil {
 		return fmt.Errorf("failed to start config watcher: %w", err)
 	}
 
-	if err := startRoomsWatcher(); err != nil {
-		logging.Warn("Rooms watcher not started", zap.Error(err))
+	if err := startGroupsWatcher(); err != nil {
+		logging.Warn("Groups watcher not started", zap.Error(err))
 	}
 
 	return nil
@@ -148,36 +148,36 @@ func Parse() error {
 	return nil
 }
 
-// LoadRooms loads target rooms from rooms.json
-func LoadRooms() error {
-	data, err := os.ReadFile(roomsFile)
+// LoadGroups loads target groups from groups.json
+func LoadGroups() error {
+	data, err := os.ReadFile(groupsFile)
 	if err != nil {
 		return err
 	}
 
-	var rooms []string
-	if err := json.Unmarshal(data, &rooms); err != nil {
-		return fmt.Errorf("failed to parse rooms.json: %w", err)
+	var groups []string
+	if err := json.Unmarshal(data, &groups); err != nil {
+		return fmt.Errorf("failed to parse groups.json: %w", err)
 	}
 
-	targetRooms.Store(&rooms)
-	logging.Info("Loaded target rooms from rooms.json", zap.Int("count", len(rooms)))
+	targetGroups.Store(&groups)
+	logging.Info("Loaded target groups from groups.json", zap.Int("count", len(groups)))
 	return nil
 }
 
-// SaveRooms saves target rooms to rooms.json
-func SaveRooms(rooms []string) error {
-	data, err := json.MarshalIndent(rooms, "", "  ")
+// SaveGroups saves target groups to groups.json
+func SaveGroups(groups []string) error {
+	data, err := json.MarshalIndent(groups, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal rooms: %w", err)
+		return fmt.Errorf("failed to marshal groups: %w", err)
 	}
 
-	if err := os.WriteFile(roomsFile, data, 0644); err != nil {
-		return fmt.Errorf("failed to write rooms.json: %w", err)
+	if err := os.WriteFile(groupsFile, data, 0644); err != nil {
+		return fmt.Errorf("failed to write groups.json: %w", err)
 	}
 
-	targetRooms.Store(&rooms)
-	logging.Info("Saved rooms to rooms.json", zap.Int("count", len(rooms)))
+	targetGroups.Store(&groups)
+	logging.Info("Saved groups to groups.json", zap.Int("count", len(groups)))
 	return nil
 }
 
@@ -225,8 +225,8 @@ func startConfigWatcher() error {
 	return nil
 }
 
-func startRoomsWatcher() error {
-	if _, err := os.Stat(roomsFile); os.IsNotExist(err) {
+func startGroupsWatcher() error {
+	if _, err := os.Stat(groupsFile); os.IsNotExist(err) {
 		return nil
 	}
 
@@ -234,11 +234,11 @@ func startRoomsWatcher() error {
 	if err != nil {
 		return err
 	}
-	roomsWatcher = watcher
+	groupsWatcher = watcher
 
-	if err := watcher.Add(roomsFile); err != nil {
+	if err := watcher.Add(groupsFile); err != nil {
 		watcher.Close()
-		return fmt.Errorf("failed to watch rooms.json: %w", err)
+		return fmt.Errorf("failed to watch groups.json: %w", err)
 	}
 
 	go func() {
@@ -250,23 +250,23 @@ func startRoomsWatcher() error {
 					return
 				}
 				if event.Has(fsnotify.Write) {
-					logging.Info("rooms.json changed, reloading...")
-					if err := LoadRooms(); err != nil {
-						logging.Error("Error reloading rooms", zap.Error(err))
+					logging.Info("groups.json changed, reloading...")
+					if err := LoadGroups(); err != nil {
+						logging.Error("Error reloading groups", zap.Error(err))
 					}
 				}
 			case err, ok := <-watcher.Errors:
 				if !ok {
 					return
 				}
-				logging.Error("Rooms watcher error", zap.Error(err))
+				logging.Error("Groups watcher error", zap.Error(err))
 			case <-stopWatchers:
 				return
 			}
 		}
 	}()
 
-	logging.Info("Watching rooms.json for changes")
+	logging.Info("Watching groups.json for changes")
 	return nil
 }
 
@@ -292,11 +292,11 @@ func (c *Config) validate() error {
 		zap.String("baseURL", c.LLMBaseURL),
 		zap.String("promptFile", c.SystemPromptFile))
 
-	rooms := GetTargetRooms()
-	if len(rooms) > 0 {
-		logging.Info("Target rooms", zap.Strings("rooms", rooms))
+	groups := GetTargetGroups()
+	if len(groups) > 0 {
+		logging.Info("Target groups", zap.Strings("groups", groups))
 	} else {
-		logging.Info("Target rooms: All")
+		logging.Info("Target groups: All")
 	}
 
 	logging.Info("Summary triggers",

@@ -12,14 +12,14 @@ import (
 )
 
 type Message struct {
-	ID        string
-	Timestamp time.Time
-	Sender    string
-	RoomTopic string
-	Content   *Content
+	ID         string
+	Timestamp  time.Time
+	Sender     string
+	GroupTopic string
+	Content    *Content
 }
 
-type roomData struct {
+type groupData struct {
 	mu              sync.RWMutex
 	messages        []Message
 	writeIndex      int
@@ -30,124 +30,124 @@ type roomData struct {
 }
 
 type MessageBuffer struct {
-	rooms *haxmap.Map[string, *roomData]
+	groups *haxmap.Map[string, *groupData]
 }
 
 func New() *MessageBuffer {
 	return &MessageBuffer{
-		rooms: haxmap.New[string, *roomData](),
+		groups: haxmap.New[string, *groupData](),
 	}
 }
 
-func (b *MessageBuffer) getOrCreateRoom(roomTopic string) *roomData {
-	room, _ := b.rooms.GetOrCompute(roomTopic, func() *roomData {
+func (b *MessageBuffer) getOrCreateGroup(groupTopic string) *groupData {
+	group, _ := b.groups.GetOrCompute(groupTopic, func() *groupData {
 		cap := config.GetConfig().MaxBufferSize
-		return &roomData{
+		return &groupData{
 			messages:   make([]Message, cap),
 			capacity:   cap,
 			messageIDs: make(map[string]struct{}),
 		}
 	})
-	return room
+	return group
 }
 
 func (b *MessageBuffer) Add(msg Message) {
-	room := b.getOrCreateRoom(msg.RoomTopic)
-	room.mu.Lock()
-	defer room.mu.Unlock()
+	group := b.getOrCreateGroup(msg.GroupTopic)
+	group.mu.Lock()
+	defer group.mu.Unlock()
 
-	if _, ok := room.messageIDs[msg.ID]; ok {
+	if _, ok := group.messageIDs[msg.ID]; ok {
 		logging.Debug("Duplicate message ID detected, skipping",
 			zap.String("id", msg.ID),
-			zap.String("room", msg.RoomTopic))
+			zap.String("group", msg.GroupTopic))
 		return
 	}
 
-	firstMsg := room.writeIndex
-	if room.count == room.capacity {
-		firstMsgID := room.messages[firstMsg].ID
-		delete(room.messageIDs, firstMsgID)
+	firstMsg := group.writeIndex
+	if group.count == group.capacity {
+		firstMsgID := group.messages[firstMsg].ID
+		delete(group.messageIDs, firstMsgID)
 	}
 
-	room.messages[room.writeIndex] = msg
-	room.messageIDs[msg.ID] = struct{}{}
-	room.writeIndex = (room.writeIndex + 1) % room.capacity
+	group.messages[group.writeIndex] = msg
+	group.messageIDs[msg.ID] = struct{}{}
+	group.writeIndex = (group.writeIndex + 1) % group.capacity
 
-	if room.count < room.capacity {
-		room.count++
+	if group.count < group.capacity {
+		group.count++
 	}
 
 	logging.Debug("Message added to buffer",
-		zap.String("room", msg.RoomTopic),
-		zap.Int("count", room.count))
+		zap.String("group", msg.GroupTopic),
+		zap.Int("count", group.count))
 }
 
-func (b *MessageBuffer) GetRoomTopics() []string {
+func (b *MessageBuffer) GetGroupTopics() []string {
 	topics := make([]string, 0)
-	b.rooms.ForEach(func(topic string, _ *roomData) bool {
+	b.groups.ForEach(func(topic string, _ *groupData) bool {
 		topics = append(topics, topic)
 		return true
 	})
 	return topics
 }
 
-func (b *MessageBuffer) Clear(roomTopic string) {
-	room, ok := b.rooms.Get(roomTopic)
+func (b *MessageBuffer) Clear(groupTopic string) {
+	group, ok := b.groups.Get(groupTopic)
 	if !ok {
 		return
 	}
 
-	room.mu.Lock()
-	defer room.mu.Unlock()
+	group.mu.Lock()
+	defer group.mu.Unlock()
 
 	logging.Info("Buffered messages cleared",
-		zap.Int("count", room.count),
-		zap.String("room", roomTopic))
-	room.writeIndex = 0
-	room.count = 0
-	room.messageIDs = make(map[string]struct{})
-	room.lastSummaryTime = time.Now()
+		zap.Int("count", group.count),
+		zap.String("group", groupTopic))
+	group.writeIndex = 0
+	group.count = 0
+	group.messageIDs = make(map[string]struct{})
+	group.lastSummaryTime = time.Now()
 }
 
-func (b *MessageBuffer) ShouldSummarize(roomTopic string, triggeredByKeyword bool) bool {
-	room, ok := b.rooms.Get(roomTopic)
+func (b *MessageBuffer) ShouldSummarize(groupTopic string, triggeredByKeyword bool) bool {
+	group, ok := b.groups.Get(groupTopic)
 	if !ok {
 		return false
 	}
 
-	room.mu.RLock()
-	defer room.mu.RUnlock()
+	group.mu.RLock()
+	defer group.mu.RUnlock()
 
 	cfg := config.GetConfig()
 
-	if room.count < cfg.SummaryTrigger.MinMessagesForSummary {
+	if group.count < cfg.SummaryTrigger.MinMessagesForSummary {
 		logging.Debug("Not enough messages for summary",
-			zap.String("room", roomTopic),
-			zap.Int("count", room.count),
+			zap.String("group", groupTopic),
+			zap.Int("count", group.count),
 			zap.Int("min", cfg.SummaryTrigger.MinMessagesForSummary))
 		return false
 	}
 
 	if triggeredByKeyword {
-		logging.Info("Summary triggered by keyword", zap.String("room", roomTopic))
+		logging.Info("Summary triggered by keyword", zap.String("group", groupTopic))
 		return true
 	}
 
 	if cfg.SummaryTrigger.MessageCount > 0 &&
-		room.count >= cfg.SummaryTrigger.MessageCount {
+		group.count >= cfg.SummaryTrigger.MessageCount {
 		logging.Info("Summary triggered by message count",
-			zap.String("room", roomTopic),
-			zap.Int("count", room.count),
+			zap.String("group", groupTopic),
+			zap.Int("count", group.count),
 			zap.Int("trigger", cfg.SummaryTrigger.MessageCount))
 		return true
 	}
 
 	if cfg.SummaryTrigger.IntervalMinutes > 0 {
-		if !room.lastSummaryTime.IsZero() {
-			minutesSinceLast := time.Since(room.lastSummaryTime).Minutes()
+		if !group.lastSummaryTime.IsZero() {
+			minutesSinceLast := time.Since(group.lastSummaryTime).Minutes()
 			if minutesSinceLast >= float64(cfg.SummaryTrigger.IntervalMinutes) {
 				logging.Info("Summary triggered by time interval",
-					zap.String("room", roomTopic),
+					zap.String("group", groupTopic),
 					zap.Float64("minutesSinceLast", minutesSinceLast),
 					zap.Int("interval", cfg.SummaryTrigger.IntervalMinutes))
 				return true
@@ -166,39 +166,39 @@ type Snapshot struct {
 	Contents     []*Content
 }
 
-func (b *MessageBuffer) GetSnapshot(roomTopic string) Snapshot {
-	room, ok := b.rooms.Get(roomTopic)
+func (b *MessageBuffer) GetSnapshot(groupTopic string) Snapshot {
+	group, ok := b.groups.Get(groupTopic)
 	if !ok {
 		return Snapshot{Participants: make(map[string]struct{})}
 	}
 
-	room.mu.RLock()
-	defer room.mu.RUnlock()
+	group.mu.RLock()
+	defer group.mu.RUnlock()
 
 	snapshot := Snapshot{
-		Count:        room.count,
+		Count:        group.count,
 		Participants: make(map[string]struct{}),
 	}
 
-	if room.count == 0 {
+	if group.count == 0 {
 		return snapshot
 	}
 
 	startIndex := 0
-	if room.count == room.capacity {
-		startIndex = room.writeIndex
+	if group.count == group.capacity {
+		startIndex = group.writeIndex
 	}
 
-	firstMsg := room.messages[startIndex]
-	lastMsg := room.messages[(startIndex+room.count-1)%room.capacity]
+	firstMsg := group.messages[startIndex]
+	lastMsg := group.messages[(startIndex+group.count-1)%group.capacity]
 
 	snapshot.FirstMsgTime = &firstMsg.Timestamp
 	snapshot.LastMsgTime = &lastMsg.Timestamp
-	snapshot.Contents = make([]*Content, 0, room.count*2)
+	snapshot.Contents = make([]*Content, 0, group.count*2)
 
-	for i := 0; i < room.count; i++ {
-		msgIndex := (startIndex + i) % room.capacity
-		msg := room.messages[msgIndex]
+	for i := 0; i < group.count; i++ {
+		msgIndex := (startIndex + i) % group.capacity
+		msg := group.messages[msgIndex]
 		snapshot.Participants[msg.Sender] = struct{}{}
 
 		header := fmt.Sprintf("[%s] %s:", msg.Timestamp.Format("15:04"), msg.Sender)

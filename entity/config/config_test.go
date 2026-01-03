@@ -82,39 +82,39 @@ func TestConfigCallback(t *testing.T) {
 	}
 }
 
-func TestSaveAndLoadRooms(t *testing.T) {
-	testRooms := []string{"测试群1", "TestRoom-2", "群聊👍"}
+func TestSaveAndLoadGroups(t *testing.T) {
+	testGroups := []string{"测试群1", "TestGroup-2", "群聊👍"}
 
-	if err := SaveRooms(testRooms); err != nil {
-		t.Fatalf("SaveRooms() failed: %v", err)
+	if err := SaveGroups(testGroups); err != nil {
+		t.Fatalf("SaveGroups() failed: %v", err)
 	}
-	defer os.Remove(roomsFile)
+	defer os.Remove(groupsFile)
 
-	if err := LoadRooms(); err != nil {
-		t.Fatalf("LoadRooms() failed: %v", err)
-	}
-
-	loaded := GetTargetRooms()
-	if len(loaded) != len(testRooms) {
-		t.Fatalf("GetTargetRooms() returned %d rooms, want %d", len(loaded), len(testRooms))
+	if err := LoadGroups(); err != nil {
+		t.Fatalf("LoadGroups() failed: %v", err)
 	}
 
-	for i, room := range testRooms {
-		if loaded[i] != room {
-			t.Errorf("Room[%d] = %q, want %q", i, loaded[i], room)
+	loaded := GetTargetGroups()
+	if len(loaded) != len(testGroups) {
+		t.Fatalf("GetTargetGroups() returned %d groups, want %d", len(loaded), len(testGroups))
+	}
+
+	for i, group := range testGroups {
+		if loaded[i] != group {
+			t.Errorf("Group[%d] = %q, want %q", i, loaded[i], group)
 		}
 	}
 }
 
-func TestGetTargetRoomsConcurrent(t *testing.T) {
-	testRooms := []string{"room1", "room2"}
-	if err := SaveRooms(testRooms); err != nil {
-		t.Fatalf("SaveRooms() failed: %v", err)
+func TestGetTargetGroupsConcurrent(t *testing.T) {
+	testGroups := []string{"group1", "group2"}
+	if err := SaveGroups(testGroups); err != nil {
+		t.Fatalf("SaveGroups() failed: %v", err)
 	}
-	defer os.Remove(roomsFile)
+	defer os.Remove(groupsFile)
 
-	if err := LoadRooms(); err != nil {
-		t.Fatalf("LoadRooms() failed: %v", err)
+	if err := LoadGroups(); err != nil {
+		t.Fatalf("LoadGroups() failed: %v", err)
 	}
 
 	var wg sync.WaitGroup
@@ -122,9 +122,9 @@ func TestGetTargetRoomsConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			rooms := GetTargetRooms()
-			if len(rooms) != 2 {
-				t.Errorf("GetTargetRooms() returned %d rooms, want 2", len(rooms))
+			groups := GetTargetGroups()
+			if len(groups) != 2 {
+				t.Errorf("GetTargetGroups() returned %d groups, want 2", len(groups))
 			}
 		}()
 	}

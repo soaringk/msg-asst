@@ -90,7 +90,7 @@ func (s *Service) getSystemPrompt() string {
 	return s.systemPrompt.Load().(string)
 }
 
-func (s *Service) GenerateSummary(ctx context.Context, roomTopic string, timeRange string, messageCount int, messages []*chat.Content) (string, error) {
+func (s *Service) GenerateSummary(ctx context.Context, groupTopic string, timeRange string, messageCount int, messages []*chat.Content) (string, error) {
 	p := s.provider.Load()
 	if p == nil {
 		return "", fmt.Errorf("provider not initialized")
@@ -99,7 +99,7 @@ func (s *Service) GenerateSummary(ctx context.Context, roomTopic string, timeRan
 	// Prepare the preamble text
 	preamble := fmt.Sprintf(
 		"群聊名称：%s\n消息时间范围：%s\n消息数量：%d\n\n请基于以下消息生成纪要，只输出结果本身：\n<messages>\n",
-		roomTopic, timeRange, messageCount,
+		groupTopic, timeRange, messageCount,
 	)
 
 	var requestContents []*chat.Content

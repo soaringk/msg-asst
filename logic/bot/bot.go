@@ -44,7 +44,7 @@ func New() *Bot {
 	}
 }
 
-func (b *Bot) Start(selectRooms bool) error {
+func (b *Bot) Start(selectGroups bool) error {
 	logging.Info("Initializing WeChat Meeting Scribe...")
 
 	b.bot.UUIDCallback = openwechat.PrintlnQrcodeUrl
@@ -71,9 +71,9 @@ func (b *Bot) Start(selectRooms bool) error {
 
 	logging.Info("Logged in successfully", zap.String("user", self.NickName))
 
-	if selectRooms {
-		if err := b.promptRoomSelection(); err != nil {
-			return fmt.Errorf("room selection failed: %w", err)
+	if selectGroups {
+		if err := b.promptGroupSelection(); err != nil {
+			return fmt.Errorf("group selection failed: %w", err)
 		}
 	}
 
@@ -87,7 +87,7 @@ func (b *Bot) Start(selectRooms bool) error {
 	return nil
 }
 
-func (b *Bot) promptRoomSelection() error {
+func (b *Bot) promptGroupSelection() error {
 	groups, err := b.self.Groups()
 	if err != nil {
 		return fmt.Errorf("failed to get groups: %w", err)
@@ -103,7 +103,7 @@ func (b *Bot) promptRoomSelection() error {
 		fmt.Printf("   [%d] %s\n", i+1, group.NickName)
 	}
 
-	fmt.Println("\nEnter room numbers (comma-separated), or 'all':")
+	fmt.Println("\nEnter group numbers (comma-separated), or 'all':")
 	fmt.Print("> ")
 
 	reader := bufio.NewReader(os.Stdin)
@@ -113,13 +113,13 @@ func (b *Bot) promptRoomSelection() error {
 	}
 	input = strings.TrimSpace(input)
 
-	var selectedRooms []string
+	var selectedGroups []string
 
 	if strings.ToLower(input) == "all" {
 		for _, group := range groups {
-			selectedRooms = append(selectedRooms, group.NickName)
+			selectedGroups = append(selectedGroups, group.NickName)
 		}
-		logging.Info("Selected all rooms", zap.Int("count", len(selectedRooms)))
+		logging.Info("Selected all groups", zap.Int("count", len(selectedGroups)))
 	} else {
 		parts := strings.Split(input, ",")
 		for _, part := range parts {
@@ -132,22 +132,22 @@ func (b *Bot) promptRoomSelection() error {
 				logging.Warn("Invalid selection", zap.String("input", part))
 				continue
 			}
-			selectedRooms = append(selectedRooms, groups[num-1].NickName)
+			selectedGroups = append(selectedGroups, groups[num-1].NickName)
 		}
 	}
 
-	if len(selectedRooms) == 0 {
-		logging.Info("No rooms selected, will monitor all rooms")
+	if len(selectedGroups) == 0 {
+		logging.Info("No groups selected, will monitor all groups")
 		return nil
 	}
 
-	if err := config.SaveRooms(selectedRooms); err != nil {
-		return fmt.Errorf("failed to save rooms: %w", err)
+	if err := config.SaveGroups(selectedGroups); err != nil {
+		return fmt.Errorf("failed to save groups: %w", err)
 	}
 
-	fmt.Printf("\n✅ Saved %d rooms to rooms.json\n", len(selectedRooms))
-	for _, room := range selectedRooms {
-		fmt.Printf("   • %s\n", room)
+	fmt.Printf("\n✅ Saved %d groups to groups.json\n", len(selectedGroups))
+	for _, group := range selectedGroups {
+		fmt.Printf("   • %s\n", group)
 	}
 
 	return nil
@@ -186,7 +186,7 @@ func (b *Bot) handleMessage(msg *openwechat.Message) {
 	group := openwechat.Group{User: sender}
 	groupName := group.NickName
 
-	if !b.isTargetRoom(groupName) {
+	if !b.isTargetGroup(groupName) {
 		return
 	}
 
@@ -209,11 +209,11 @@ func (b *Bot) handleMessage(msg *openwechat.Message) {
 	}
 
 	b.buffer.Add(chat.Message{
-		ID:        msg.MsgId,
-		Timestamp: time.Now(),
-		Sender:    senderUser.NickName,
-		RoomTopic: groupName,
-		Content:   extractedContent,
+		ID:         msg.MsgId,
+		Timestamp:  time.Now(),
+		Sender:     senderUser.NickName,
+		GroupTopic: groupName,
+		Content:    extractedContent,
 	})
 
 	if b.buffer.ShouldSummarize(groupName, b.checkKeywordTrigger(extractedContent.Text)) {
@@ -255,15 +255,15 @@ func (b *Bot) isMediaAllowed(c *chat.Content) bool {
 	return c.Data == nil || int64(len(c.Data)) <= maxBytes
 }
 
-func (b *Bot) isTargetRoom(roomName string) bool {
-	targetRooms := config.GetTargetRooms()
-	if len(targetRooms) == 0 {
+func (b *Bot) isTargetGroup(groupName string) bool {
+	targetGroups := config.GetTargetGroups()
+	if len(targetGroups) == 0 {
 		return true
 	}
 
-	roomNameLower := strings.ToLower(roomName)
-	for _, target := range targetRooms {
-		if strings.Contains(roomNameLower, strings.ToLower(target)) {
+	groupNameLower := strings.ToLower(groupName)
+	for _, target := range targetGroups {
+		if strings.Contains(groupNameLower, strings.ToLower(target)) {
 			return true
 		}
 	}
@@ -278,35 +278,35 @@ func (b *Bot) checkKeywordTrigger(text string) bool {
 	return strings.Contains(text, keyword)
 }
 
-func (b *Bot) triggerSummary(roomTopic string) {
-	if _, loaded := b.activeSummaries.LoadOrStore(roomTopic, true); loaded {
+func (b *Bot) triggerSummary(groupTopic string) {
+	if _, loaded := b.activeSummaries.LoadOrStore(groupTopic, true); loaded {
 		return
 	}
 
 	b.wg.Add(1)
 	go func() {
 		defer b.wg.Done()
-		defer b.activeSummaries.Delete(roomTopic)
-		b.generateAndSendSummary(roomTopic)
+		defer b.activeSummaries.Delete(groupTopic)
+		b.generateAndSendSummary(groupTopic)
 	}()
 }
 
-func (b *Bot) generateAndSendSummary(roomTopic string) {
-	logging.Info("Generating summary", zap.String("room", roomTopic))
+func (b *Bot) generateAndSendSummary(groupTopic string) {
+	logging.Info("Generating summary", zap.String("group", groupTopic))
 
-	result, err := b.generator.Generate(b.ctx, b.buffer, roomTopic)
+	result, err := b.generator.Generate(b.ctx, b.buffer, groupTopic)
 	if err != nil {
 		if err == context.Canceled {
-			logging.Info("Summary generation cancelled", zap.String("room", roomTopic))
+			logging.Info("Summary generation cancelled", zap.String("group", groupTopic))
 			return
 		}
-		logging.Error("Error generating summary", zap.String("room", roomTopic), zap.Error(err))
+		logging.Error("Error generating summary", zap.String("group", groupTopic), zap.Error(err))
 		return
 	}
 
 	if result.SkipReason != "" {
-		logging.Info("Summary skipped", zap.String("room", roomTopic), zap.String("reason", result.SkipReason))
-		b.buffer.Clear(roomTopic)
+		logging.Info("Summary skipped", zap.String("group", groupTopic), zap.String("reason", result.SkipReason))
+		b.buffer.Clear(groupTopic)
 		return
 	}
 
@@ -315,8 +315,8 @@ func (b *Bot) generateAndSendSummary(roomTopic string) {
 		return
 	}
 
-	b.buffer.Clear(roomTopic)
-	logging.Info("Summary sent successfully", zap.String("room", roomTopic))
+	b.buffer.Clear(groupTopic)
+	logging.Info("Summary sent successfully", zap.String("group", groupTopic))
 }
 
 func (b *Bot) sendToSelf(message string) error {
@@ -341,10 +341,10 @@ func (b *Bot) startIntervalTimer() {
 			select {
 			case <-ticker.C:
 				logging.Info("Interval timer triggered")
-				roomTopics := b.buffer.GetRoomTopics()
-				for _, topic := range roomTopics {
+				groupTopics := b.buffer.GetGroupTopics()
+				for _, topic := range groupTopics {
 					if b.buffer.ShouldSummarize(topic, false) {
-						logging.Info("Processing scheduled summary", zap.String("room", topic))
+						logging.Info("Processing scheduled summary", zap.String("group", topic))
 						b.triggerSummary(topic)
 					}
 				}
