@@ -22,5 +22,5 @@ Thumbs.db
 *.swo
 
 # Go build artifacts
-wechat-meeting-scribe
-wechat-meeting-scribe.exe
+msg-asst
+msg-asst.exe

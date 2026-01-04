@@ -6,9 +6,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/soaringk/wechat-meeting-scribe/entity/config"
-	"github.com/soaringk/wechat-meeting-scribe/logic/bot"
-	"github.com/soaringk/wechat-meeting-scribe/pkg/logging"
+	"github.com/soaringk/msg-asst/entity/config"
+	"github.com/soaringk/msg-asst/logic/bot"
+	"github.com/soaringk/msg-asst/pkg/logging"
 	"go.uber.org/zap"
 )
 

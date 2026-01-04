@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/eatmoreapple/openwechat"
-	"github.com/soaringk/wechat-meeting-scribe/entity/chat"
-	"github.com/soaringk/wechat-meeting-scribe/entity/config"
-	"github.com/soaringk/wechat-meeting-scribe/logic/summary"
-	"github.com/soaringk/wechat-meeting-scribe/pkg/logging"
+	"github.com/soaringk/msg-asst/entity/chat"
+	"github.com/soaringk/msg-asst/entity/config"
+	"github.com/soaringk/msg-asst/logic/summary"
+	"github.com/soaringk/msg-asst/pkg/logging"
 	"go.uber.org/zap"
 )
 

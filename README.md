@@ -35,8 +35,8 @@ The bot generates meeting minutes with the following structure:
 1. **Clone the repository**
 
 ```bash
-git clone https://github.com/yourusername/wechat-meeting-scribe.git
-cd wechat-meeting-scribe
+git clone https://github.com/yourusername/msg-asst.git
+cd msg-asst
 ```
 
 2. **Configure environment variables**
@@ -101,7 +101,7 @@ go run main.go
 The project follows a clean architecture:
 
 ```
-wechat-meeting-scribe/
+msg-asst/
 ├── entity/
 │   ├── chat/           # Core chat entities (Message, Buffer, Content)
 │   ├── config/         # Configuration logic

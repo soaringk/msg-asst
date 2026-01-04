@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/soaringk/wechat-meeting-scribe/entity/chat"
-	"github.com/soaringk/wechat-meeting-scribe/entity/llm"
-	"github.com/soaringk/wechat-meeting-scribe/pkg/logging"
+	"github.com/soaringk/msg-asst/entity/chat"
+	"github.com/soaringk/msg-asst/entity/llm"
+	"github.com/soaringk/msg-asst/pkg/logging"
 	"go.uber.org/zap"
 )
 

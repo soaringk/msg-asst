@@ -3,7 +3,7 @@ package llm
 import (
 	"context"
 
-	"github.com/soaringk/wechat-meeting-scribe/entity/chat"
+	"github.com/soaringk/msg-asst/entity/chat"
 )
 
 type Provider interface {

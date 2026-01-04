@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/soaringk/wechat-meeting-scribe/entity/chat"
-	"github.com/soaringk/wechat-meeting-scribe/pkg/logging"
+	"github.com/soaringk/msg-asst/entity/chat"
+	"github.com/soaringk/msg-asst/pkg/logging"
 	"go.uber.org/zap"
 	"google.golang.org/genai"
 )

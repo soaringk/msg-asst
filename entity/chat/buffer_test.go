@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/soaringk/wechat-meeting-scribe/entity/config"
+	"github.com/soaringk/msg-asst/entity/config"
 )
 
 func TestMain(m *testing.M) {

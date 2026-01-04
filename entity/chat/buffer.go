@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/alphadose/haxmap"
-	"github.com/soaringk/wechat-meeting-scribe/entity/config"
-	"github.com/soaringk/wechat-meeting-scribe/pkg/logging"
+	"github.com/soaringk/msg-asst/entity/config"
+	"github.com/soaringk/msg-asst/pkg/logging"
 	"go.uber.org/zap"
 )
 

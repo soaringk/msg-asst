@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/soaringk/wechat-meeting-scribe/entity/chat"
-	"github.com/soaringk/wechat-meeting-scribe/entity/config"
+	"github.com/soaringk/msg-asst/entity/chat"
+	"github.com/soaringk/msg-asst/entity/config"
 )
 
 // MockProvider implements Provider for testing

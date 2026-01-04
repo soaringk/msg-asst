@@ -1,4 +1,4 @@
-module github.com/soaringk/wechat-meeting-scribe
+module github.com/soaringk/msg-asst
 
 go 1.24
 
